@@ -1,0 +1,48 @@
+[project]
+name = "plutus"
+version = "0.1.0"
+description = "Personal trading platform + autotrader (single-user, self-hosted)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jinja2>=3.1",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "pydantic-settings>=2.4",
+    "structlog>=24.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plutus"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/plutus", "tests"]
+
+[[tool.mypy.overrides]]
+module = "plutus.migrations.*"
+disallow_untyped_defs = false

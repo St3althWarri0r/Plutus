@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plutus</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
+    .mode-banner { padding: 1rem; text-align: center; font-size: 2rem; font-weight: 800; letter-spacing: 0.3em; }
+    .mode-paper { background: #14532d; color: #bbf7d0; }
+    .mode-live { background: #7f1d1d; color: #fecaca; }
+    main { padding: 2rem; }
+  </style>
+</head>
+<body>
+  <div class="mode-banner {% if trading_mode == 'live' %}mode-live{% else %}mode-paper{% endif %}">
+    {{ trading_mode | upper }}
+  </div>
+  <main>
+    <h1>Plutus</h1>
+    <p>v{{ version }} — scaffold. Dashboard arrives in Phase 1.</p>
+  </main>
+</body>
+</html>

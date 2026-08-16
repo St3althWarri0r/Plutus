@@ -1,0 +1,22 @@
+# Secrets — never commit (CLAUDE.md rule 3)
+.env
+
+# Live-mode lock and kill switch are runtime state, never source
+live.lock
+KILL
+
+# Local databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+*.egg-info/
