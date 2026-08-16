@@ -25,4 +25,11 @@ def test_upgrade_head_on_fresh_db(tmp_path: Path) -> None:
     tables = set(inspect(engine).get_table_names())
     engine.dispose()
     assert "snapshots" in tables
+    assert "orders" in tables
     assert "alembic_version" in tables
+
+    unique_cols = {
+        tuple(uc["column_names"])
+        for uc in inspect(create_engine(db_url)).get_unique_constraints("orders")
+    }
+    assert ("idempotency_key",) in unique_cols

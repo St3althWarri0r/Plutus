@@ -1,0 +1,30 @@
+<div id="orders" hx-get="/partials/orders" hx-trigger="every 3s" hx-swap="outerHTML">
+  <h2>Orders</h2>
+  {% if orders %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Type</th>
+        <th>Limit</th><th>Status</th><th>Broker ID</th><th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr>
+        <td>{{ o.id }}</td>
+        <td>{{ o.symbol }}</td>
+        <td>{{ o.side }}</td>
+        <td>{{ o.qty }}</td>
+        <td>{{ o.order_type }}</td>
+        <td>{{ o.limit_price if o.limit_price is not none else "—" }}</td>
+        <td class="status status-{{ o.status }}">{{ o.status }}</td>
+        <td>{{ o.broker_order_id or "—" }}</td>
+        <td>{{ o.reject_reason or "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No orders yet.</p>
+  {% endif %}
+</div>

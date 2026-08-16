@@ -4,12 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Plutus</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
     .mode-banner { padding: 1rem; text-align: center; font-size: 2rem; font-weight: 800; letter-spacing: 0.3em; }
     .mode-paper { background: #14532d; color: #bbf7d0; }
     .mode-live { background: #7f1d1d; color: #fecaca; }
-    main { padding: 2rem; }
+    main { padding: 2rem; max-width: 960px; margin: 0 auto; }
+    section { margin-bottom: 2rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid #2a2e37; }
+    .cards { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .card { background: #191d24; border: 1px solid #2a2e37; border-radius: 8px; padding: 1rem 1.5rem; min-width: 10rem; }
+    .card .label { color: #8b93a3; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; }
+    .card .value { font-size: 1.5rem; font-weight: 700; margin-top: 0.25rem; }
+    form.order-form { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: end; background: #191d24; border: 1px solid #2a2e37; border-radius: 8px; padding: 1rem 1.5rem; }
+    form.order-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: #8b93a3; }
+    form.order-form input, form.order-form select { background: #0f1115; color: #e6e6e6; border: 1px solid #2a2e37; border-radius: 4px; padding: 0.4rem; }
+    form.order-form button { background: #14532d; color: #bbf7d0; border: 0; border-radius: 4px; padding: 0.6rem 1.4rem; font-weight: 700; cursor: pointer; }
+    .notice { background: #78350f; color: #fde68a; padding: 0.75rem 1rem; border-radius: 8px; }
+    .muted { color: #8b93a3; }
+    .status-filled { color: #4ade80; }
+    .status-rejected { color: #f87171; }
+    #order-result:not(:empty) { margin-top: 1rem; }
   </style>
 </head>
 <body>
@@ -17,8 +34,69 @@
     {{ trading_mode | upper }}
   </div>
   <main>
-    <h1>Plutus</h1>
-    <p>v{{ version }} — scaffold. Dashboard arrives in Phase 1.</p>
+    <h1>Plutus <span class="muted">v{{ version }}</span></h1>
+
+    {% if not broker_configured %}
+    <p class="notice">
+      Alpaca is not configured. Set <code>ALPACA_PAPER_KEY</code> and
+      <code>ALPACA_PAPER_SECRET</code> in <code>.env</code>, then restart.
+    </p>
+    {% else %}
+    <section>
+      <h2>Alpaca account</h2>
+      <div class="cards">
+        <div class="card"><div class="label">Equity</div><div class="value">${{ "%.2f"|format(account.equity) }}</div></div>
+        <div class="card"><div class="label">Cash</div><div class="value">${{ "%.2f"|format(account.cash) }}</div></div>
+        <div class="card"><div class="label">Buying power</div><div class="value">${{ "%.2f"|format(account.buying_power) }}</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Positions</h2>
+      {% if positions %}
+      <table>
+        <thead>
+          <tr><th>Symbol</th><th>Qty</th><th>Avg entry</th><th>Market value</th><th>Unrealized P&amp;L</th></tr>
+        </thead>
+        <tbody>
+          {% for p in positions %}
+          <tr>
+            <td>{{ p.symbol }}</td>
+            <td>{{ p.qty }}</td>
+            <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
+            <td>${{ "%.2f"|format(p.market_value) }}</td>
+            <td>${{ "%.2f"|format(p.unrealized_pl) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No open positions.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>Manual {{ trading_mode }} order</h2>
+      <form class="order-form" method="post" action="/orders"
+            hx-post="/orders" hx-target="#order-result" hx-swap="innerHTML">
+        <label>Symbol <input name="symbol" required placeholder="SPY"></label>
+        <label>Side
+          <select name="side"><option value="buy">buy</option><option value="sell">sell</option></select>
+        </label>
+        <label>Qty <input name="qty" required type="number" step="any" min="0.000001"></label>
+        <label>Type
+          <select name="order_type"><option value="market">market</option><option value="limit">limit</option></select>
+        </label>
+        <label>Limit price <input name="limit_price" type="number" step="any" min="0.01" placeholder="limit only"></label>
+        <button type="submit">Submit {{ trading_mode }} order</button>
+      </form>
+      <div id="order-result"></div>
+    </section>
+    {% endif %}
+
+    <section>
+      {% include "_orders.html" %}
+    </section>
   </main>
 </body>
 </html>

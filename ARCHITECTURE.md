@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 0 (scaffold) complete
+## Status: Phase 1 (Alpaca read + paper orders) complete — pending user's paper-key round-trip
 
 ## System shape (target)
 
@@ -24,12 +24,21 @@ src/plutus/
   config.py         Settings (pydantic-settings, .env) + effective_trading_mode()
   logging_setup.py  structlog JSON logging
   db.py             SQLAlchemy 2.0 engine/session; Base for all models
-  models.py         Snapshot (one row per account per day)
-  app.py            FastAPI factory: /healthz, / (mode banner page)
-  templates/        Jinja2 (HTMX arrives with the real dashboard in Phase 1)
+  models.py         Snapshot; Order (one row per intent, unique idempotency_key)
+  risk.py           RiskManager — the ONLY caller of BrokerAdapter.submit_order
+  brokers/
+    base.py         OrderIntent/OrderReceipt/Position/AccountState/Fill +
+                    BrokerAdapter Protocol (§3)
+    alpaca.py       AlpacaAdapter over alpaca-py TradingClient; paper/live key
+                    selection; timeout-recovery via client_order_id lookup
+  app.py            FastAPI factory: /healthz, / (dashboard), POST /orders,
+                    GET /partials/orders (HTMX 3s status poll)
+  templates/        index.html (mode banner, account cards, positions, order
+                    form), _orders.html (order table partial)
 alembic/            Migrations; env.py resolves db_url from Settings,
                     tests override via `alembic -x db_url=...`
-tests/              config resolution, migration-to-head, app boot, gitignore hygiene
+tests/              fakes.py (FakeAdapter double) + config, migrations, order
+                    model, risk, alpaca adapter (chaos + key safety), dashboard
 ```
 
 ## Key decisions
@@ -46,15 +55,44 @@ tests/              config resolution, migration-to-head, app boot, gitignore hy
   runtime state and gitignored too.
 - Dependencies beyond §2's list: `uvicorn` (serving FastAPI) and `httpx`
   (FastAPI TestClient) — implied by the stack, flagged per rule 4.
+- **RiskManager (Phase 1 shim):** enforces the routing contract (sole caller of
+  `submit_order`), dedupes idempotency keys against the `orders` table, and
+  rejects any non-paper effective mode outright — Phase 1 has no live
+  enablement. The full §8 gate set (sizing, loss halts, rate limits, kill
+  switch, reconciliation) is deliberately deferred to Phase 4.
+- **Idempotency / timeout recovery:** the OrderIntent UUID rides Alpaca's
+  `client_order_id`. On an ambiguous submit failure (timeout/connection drop)
+  the adapter looks the order up by that key: found → return its receipt;
+  absent → raise `OrderSubmitError`, never auto-resubmit. A rejected row also
+  permanently retires its key (a retry needs a fresh intent), which fails safe.
+- **Key selection is a safety property:** the adapter factory takes the
+  *effective* mode; the paper path reads only the paper key pair (pinned by
+  test — live keys are never touched when mode resolves to paper). Missing
+  keys raise `MissingCredentialsError`; the dashboard degrades to a
+  configure-keys notice instead of crashing.
+- **No python-multipart:** the order form is parsed from the urlencoded body
+  with stdlib `parse_qs`, because FastAPI's `Form()`/Starlette's `form()`
+  would drag in `python-multipart`, which §2 does not approve.
+- **Fill confirmation is polling, not websocket:** `/partials/orders` refreshes
+  non-terminal orders via `get_order_status` on a 3s HTMX cycle. §3's
+  websocket trade-updates stream belongs with the continuously running engine
+  (Phase 5); the dashboard's HTMX script is loaded from unpkg (pinned 1.9.12).
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in
   the same root and a wrong root there fails unsafe — make the runtime root
   explicit/configurable when building the RiskManager.
 
-## Verification (Phase 0 acceptance)
+## Verification (Phase 1 acceptance)
 
-- `uv run pytest` — 10 passed
-- `uv run ruff check .` / `uv run mypy` — clean
+- `uv run pytest` — 35 passed (incl. chaos test: timeout mid-order → lookup by
+  idempotency key, no double submit; key-selection safety; fill-confirmation
+  polling; live-mode rejection)
+- `uv run ruff check .` / `uv run mypy` (strict) — clean
 - `uv run uvicorn --factory plutus.app:create_app` boots; `/healthz` →
-  `{"status":"ok","trading_mode":"paper"}`
+  `{"status":"ok","trading_mode":"paper"}`; without keys, `/` renders the
+  configure-keys notice
+- **Outstanding (needs user):** put `ALPACA_PAPER_KEY`/`ALPACA_PAPER_SECRET`
+  in `.env`, submit a small paper order via the dashboard form, watch the
+  order row poll to `filled` — that completes the Phase 1 acceptance
+  round-trip.
