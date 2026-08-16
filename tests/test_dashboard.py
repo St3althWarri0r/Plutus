@@ -57,6 +57,9 @@ def test_submit_paper_order_routes_through_risk_manager_and_persists() -> None:
 
     assert resp.status_code == 200
     assert "accepted" in resp.text
+    # ack snippet only — re-rendering the polling orders div here would
+    # duplicate it on the page
+    assert 'id="orders"' not in resp.text
     (intent,) = adapter.submitted
     assert intent.symbol == "SPY"
     assert intent.qty == 2

@@ -137,9 +137,15 @@ def create_app(
             )
             return HTMLResponse(f"Invalid order — {errors}", status_code=422)
 
-        risk.submit(intent)
-        with factory() as session:
-            orders = refresh_open_orders(session)
-        return templates.TemplateResponse(request, "_orders.html", {"orders": orders})
+        row = risk.submit(intent)
+        # one-line ack only — the orders table below polls itself and would
+        # end up duplicated if this response re-rendered the whole partial
+        detail = f" ({row.broker_order_id})" if row.broker_order_id else ""
+        if row.reject_reason:
+            detail += f" — {row.reject_reason}"
+        return HTMLResponse(
+            f'<p class="order-ack status-{row.status}">'
+            f"{row.symbol} {row.side} {row.qty} — {row.status}{detail}</p>"
+        )
 
     return app
