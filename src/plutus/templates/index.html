@@ -98,6 +98,12 @@
           <select name="order_type"><option value="market">market</option><option value="limit">limit</option></select>
         </label>
         <label>Limit price <input name="limit_price" type="number" step="any" min="0.01" placeholder="limit only"></label>
+        <label>TIF
+          <select name="time_in_force">
+            <option value="day">day</option>
+            <option value="gtc">gtc</option>
+          </select>
+        </label>
         <button type="submit">Submit {{ trading_mode }} order</button>
       </form>
       <div id="order-result"></div>

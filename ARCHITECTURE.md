@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 1 (Alpaca read + paper orders) complete — pending user's paper-key round-trip
+## Status: Phase 1 (Alpaca read + paper orders) complete — acceptance verified
 
 ## System shape (target)
 
@@ -92,7 +92,9 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
 - `uv run uvicorn --factory plutus.app:create_app` boots; `/healthz` →
   `{"status":"ok","trading_mode":"paper"}`; without keys, `/` renders the
   configure-keys notice
-- **Outstanding (needs user):** put `ALPACA_PAPER_KEY`/`ALPACA_PAPER_SECRET`
-  in `.env`, submit a small paper order via the dashboard form, watch the
-  order row poll to `filled` — that completes the Phase 1 acceptance
-  round-trip.
+- **Acceptance round-trip (2026-08-16, real paper account):** dashboard form →
+  RiskManager → AlpacaAdapter → Alpaca paper API. A BTC/USD 0.001 market order
+  (gtc — crypto trades 24/7 and rejects day TIF) filled and the 3s status poll
+  flipped the row to `filled`; the position and cash updated on refresh. A
+  1-share SPY day order was accepted and queued (submitted on a Sunday; fills
+  at next RTH open). The order form has a TIF select (day/gtc) for this.

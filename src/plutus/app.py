@@ -127,6 +127,7 @@ def create_app(
                     "side": form.get("side"),
                     "qty": form.get("qty"),
                     "order_type": form.get("order_type"),
+                    "time_in_force": form.get("time_in_force") or "day",
                     **({"limit_price": limit_price} if limit_price.strip() else {}),
                 }
             )

@@ -69,6 +69,42 @@ def test_submit_paper_order_routes_through_risk_manager_and_persists() -> None:
         assert row.trading_mode == "paper"
 
 
+def test_order_form_passes_time_in_force_through() -> None:
+    adapter = FakeAdapter()
+    client, _ = make_client(adapter)
+
+    # crypto pairs trade 24/7 but Alpaca rejects day TIF on them — the form
+    # must be able to send gtc
+    resp = client.post(
+        "/orders",
+        data={
+            "symbol": "BTC/USD",
+            "side": "buy",
+            "qty": "0.001",
+            "order_type": "market",
+            "time_in_force": "gtc",
+        },
+    )
+
+    assert resp.status_code == 200
+    (intent,) = adapter.submitted
+    assert intent.time_in_force == "gtc"
+    assert intent.symbol == "BTC/USD"
+
+
+def test_order_form_defaults_time_in_force_to_day() -> None:
+    adapter = FakeAdapter()
+    client, _ = make_client(adapter)
+
+    client.post(
+        "/orders",
+        data={"symbol": "SPY", "side": "buy", "qty": "1", "order_type": "market"},
+    )
+
+    (intent,) = adapter.submitted
+    assert intent.time_in_force == "day"
+
+
 def test_invalid_order_form_returns_error_not_500() -> None:
     client, _ = make_client(FakeAdapter())
 
