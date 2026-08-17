@@ -70,6 +70,36 @@ def test_no_entry_below_range_high_and_one_entry_per_day() -> None:
     assert orb.on_minute("QQQ", breakout) is not None
 
 
+def test_notional_cap_sizes_down_at_real_prices() -> None:
+    """Regression: at SPY ≈ 776, risk-based sizing alone produces ~$25k
+    notional — every entry would die at the §8 position-size gate. The
+    notional cap must bind first."""
+    orb = OpeningRangeBreakout(
+        OrbConfig(symbols=["SPY"], range_minutes=3, risk_usd=100.0, max_notional_usd=5_000.0)
+    )
+    closes = [775.0, 776.0, 775.5, 778.5]
+    highs = [776.2, 776.5, 776.0, 778.6]
+    idx = pd.date_range("2026-08-17 13:30", periods=4, freq="min", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "open": closes,
+            "high": highs,
+            "low": [c - 1.5 for c in closes],
+            "close": closes,
+            "volume": 1e5,
+        },
+        index=idx,
+    )
+
+    intent = orb.on_minute("SPY", frame)
+
+    assert intent is not None
+    # risk sizing alone: floor(100 / (778.5 − 773.5)) = 20 shares ≈ $15.6k
+    # notional cap: floor(5000 / 778.5) = 6 shares
+    assert intent.qty == 6
+    assert intent.qty * 778.5 <= 5_000.0
+
+
 def test_config_loads_from_toml(tmp_path: Path) -> None:
     path = tmp_path / "strategies.toml"
     path.write_text(

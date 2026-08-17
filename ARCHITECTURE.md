@@ -217,7 +217,23 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   (max(1e-6, 1e-8·qty)) — found by live smoke, pinned by regression test.
 - **Session ledger** (engine_sessions) is the §12/§13 acceptance clock:
   ≥30 clean sessions. A crash can't alert itself; the next startup alerts on
-  any prior unclean row.
+  any prior unclean row. An APScheduler EVENT_JOB_ERROR listener alerts and
+  marks the session unclean — job crashes cannot pass silently.
+- **Bootstrap chain (advisor-caught deadlock):** startup seeds strategy_state
+  rows with the default allocation; equity_lookup falls back to
+  day_start=allocation since inception when no 09:30 mark exists — without
+  both, the mark waited for equity and equity waited for the mark, leaving
+  daily-loss protection permanently inert on a fresh DB.
+- **ORB notional cap** (strategies.toml max_notional_usd, default $5k):
+  at SPY ≈ $776, risk-based sizing alone produced ~$25k notional and every
+  entry died at the §8 position gate. qty = min(risk-based, notional-cap).
+- SQLite runs WAL + 30s busy timeout (dashboard and engine share the file).
+- Known Phase 5 limitations: ORB's entered-today memory is in-process (a
+  mid-day restart may re-signal; the position gate contains it); a mid-day
+  engine start after downtime measures daily loss against a stale mark
+  (fails safe — spurious halt, not missed); the rotation job aborts with a
+  critical alert if any universe symbol lacks a recent IEX minute print
+  (BSV is thinnest — watch the first sessions).
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in

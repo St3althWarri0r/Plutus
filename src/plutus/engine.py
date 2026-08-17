@@ -81,6 +81,61 @@ def run_orb_tick(
 # --- runtime ------------------------------------------------------------------
 
 
+def make_strategy_equity(
+    session_factory: sessionmaker[Session],
+    risk: RiskManager,
+    *,
+    price_lookup: Callable[[str], float | None],
+) -> Callable[[str], float | None]:
+    """equity_lookup with a bootstrap base: before any 09:30 mark exists,
+    measure from day_start=allocation since inception — otherwise the mark
+    waits for equity and equity waits for the mark, and daily-loss protection
+    never activates on a fresh DB."""
+    from plutus.pnl import equity_now
+
+    def lookup(strategy: str) -> float | None:
+        with session_factory() as session:
+            state = session.scalars(
+                select(StrategyState).where(StrategyState.strategy == strategy)
+            ).one_or_none()
+            if state is None:
+                return None
+            if state.day_start_equity_usd is not None:
+                day_start = float(state.day_start_equity_usd)
+                now = risk._clock().astimezone(UTC)
+                since = datetime(now.year, now.month, now.day, 13, 30, tzinfo=UTC)
+            else:
+                day_start = float(state.allocation_usd)
+                since = datetime(1970, 1, 1, tzinfo=UTC)  # inception bootstrap
+        if day_start <= 0:
+            return None
+        return equity_now(
+            strategy,
+            session_factory=session_factory,
+            price_lookup=price_lookup,
+            day_start=day_start,
+            since=since,
+        )
+
+    return lookup
+
+
+def make_error_listener(
+    *, alert: Alert, errored: dict[str, bool]
+) -> Callable[[object], None]:
+    """APScheduler EVENT_JOB_ERROR hook: the session ledger is the 'zero
+    unhandled errors' acceptance instrument — a job crash must alert and
+    mark the session unclean."""
+
+    def listener(event: object) -> None:
+        errored["flag"] = True
+        job_id = getattr(event, "job_id", "?")
+        exception = getattr(event, "exception", None)
+        alert("critical", f"scheduler job {job_id} raised: {exception!r}")
+
+    return listener
+
+
 class EngineRuntime:
     def __init__(
         self,
@@ -90,12 +145,14 @@ class EngineRuntime:
         adapter: BrokerAdapter,
         clock: Callable[[], datetime] | None = None,
         alert: Alert = log_alert,
+        strategies: list[str] | None = None,
     ) -> None:
         self._risk = risk
         self._session_factory = session_factory
         self._adapter = adapter
         self._clock = clock or (lambda: datetime.now(UTC))
         self._alert = alert
+        self._strategies = strategies or []
         self._session_id: int | None = None
 
     def startup(self) -> None:
@@ -117,12 +174,33 @@ class EngineRuntime:
             session.commit()
             self._session_id = row.id
 
+        self._seed_strategy_states()
         self._risk.mark_manual_baseline()
         self._risk.sync_fills()
         ingest_fills(self._adapter, self._session_factory, clock=self._clock)
         self._risk.reconcile()
         self._mark_day_start_if_missed()
         log.info("engine_started", session_id=self._session_id)
+
+    def _seed_strategy_states(self) -> None:
+        """Fresh DBs have no strategy_state rows; seed them with the default
+        allocation so the mark/equity/loss chain can bootstrap."""
+        with self._session_factory() as session:
+            for name in self._strategies:
+                state = session.scalars(
+                    select(StrategyState).where(StrategyState.strategy == name)
+                ).one_or_none()
+                if state is None:
+                    session.add(
+                        StrategyState(
+                            strategy=name,
+                            enabled=True,
+                            allocation_usd=self._risk.config.default_allocation_usd,
+                        )
+                    )
+                elif float(state.allocation_usd) <= 0:
+                    state.allocation_usd = self._risk.config.default_allocation_usd
+            session.commit()
 
     def shutdown(self, *, clean: bool, error: str | None = None) -> None:
         if self._session_id is None:
@@ -158,7 +236,7 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
     from plutus.data.alpaca_data import alpaca_data_provider_from_settings
     from plutus.data.cache import CachedDataProvider
     from plutus.db import make_engine, make_session_factory
-    from plutus.pnl import DailyLossMonitor, equity_now
+    from plutus.pnl import DailyLossMonitor
     from plutus.scheduler import build_scheduler
     from plutus.strategies.orb import load_orb_config
 
@@ -191,26 +269,14 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
         except Exception:
             return None
 
-    def strategy_equity(strategy: str) -> float | None:
-        with factory() as session:
-            state = session.scalars(
-                select(StrategyState).where(StrategyState.strategy == strategy)
-            ).one_or_none()
-            if state is None or state.day_start_equity_usd is None:
-                return None
-            day_start = float(state.day_start_equity_usd)
-        now = datetime.now(UTC)
-        since = datetime(now.year, now.month, now.day, 13, 30, tzinfo=UTC)
-        return equity_now(
-            strategy,
-            session_factory=factory,
-            price_lookup=latest_minute_price,
-            day_start=day_start,
-            since=since,
-        )
+    strategy_equity = make_strategy_equity(factory, risk, price_lookup=latest_minute_price)
 
     runtime = EngineRuntime(
-        risk=risk, session_factory=factory, adapter=adapter, alert=alerter
+        risk=risk,
+        session_factory=factory,
+        adapter=adapter,
+        alert=alerter,
+        strategies=[rotation.name, orb.name],
     )
     runtime.startup()
     if alerter.configured:
@@ -279,6 +345,7 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                     strategy, day_start=float(state.day_start_equity_usd), equity=equity
                 )
 
+    from apscheduler.events import EVENT_JOB_ERROR
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 
@@ -294,6 +361,11 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
     scheduler.add_job(fills_job, IntervalTrigger(seconds=20), id="fills_sync")
     scheduler.add_job(loss_watch_job, IntervalTrigger(seconds=60), id="loss_watch")
 
+    errored = {"flag": False}
+    scheduler.add_listener(
+        make_error_listener(alert=alerter, errored=errored), EVENT_JOB_ERROR
+    )
+
     stopping = {"flag": False}
 
     def on_sigterm(_signum: int, _frame: FrameType | None) -> None:
@@ -308,7 +380,10 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
         while not stopping["flag"]:
             time.sleep(1)
         scheduler.shutdown(wait=True)
-        runtime.shutdown(clean=True)
+        runtime.shutdown(
+            clean=not errored["flag"],
+            error="one or more scheduler jobs raised" if errored["flag"] else None,
+        )
     except Exception as exc:
         alerter("critical", f"engine crashed: {exc}")
         runtime.shutdown(clean=False, error=str(exc))

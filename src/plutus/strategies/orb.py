@@ -28,6 +28,9 @@ class OrbConfig(BaseModel):
     range_minutes: int = Field(default=15, gt=0)
     risk_usd: float = Field(default=100.0, gt=0)
     target_r: float = Field(default=2.0, gt=0)
+    # at SPY ≈ $776 risk-based sizing alone yields ~$25k notional and dies at
+    # the §8 position-size gate — the notional cap binds first
+    max_notional_usd: float = Field(default=5_000.0, gt=0)
 
 
 def load_orb_config(path: Path) -> OrbConfig:
@@ -63,9 +66,12 @@ class OpeningRangeBreakout:
         per_share_risk = last_close - range_low
         if per_share_risk <= 0:
             return None
-        qty = floor(self.config.risk_usd / per_share_risk)
+        qty = min(
+            floor(self.config.risk_usd / per_share_risk),
+            floor(self.config.max_notional_usd / last_close),
+        )
         if qty < 1:
-            log.info("orb_skip_risk_too_wide", symbol=symbol, r=per_share_risk)
+            log.info("orb_skip_unsizeable", symbol=symbol, r=per_share_risk, price=last_close)
             return None
 
         self._entered[symbol] = session

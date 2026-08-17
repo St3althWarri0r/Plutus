@@ -19,6 +19,13 @@ class Base(DeclarativeBase):
 
 def make_engine(db_url: str | None = None) -> Engine:
     url = db_url or get_settings().db_url
+    if url.startswith("sqlite") and ":memory:" not in url:
+        # the dashboard and the engine share this file; WAL + busy timeout
+        # prevent "database is locked" under overlapping writers
+        engine = create_engine(url, connect_args={"timeout": 30})
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        return engine
     return create_engine(url)
 
 

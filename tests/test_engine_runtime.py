@@ -135,6 +135,66 @@ def test_startup_writes_session_marks_baseline_and_reconciles(tmp_path: Path) ->
         assert row.clean and row.stopped_at is not None
 
 
+def test_startup_seeds_strategy_states_breaking_bootstrap_deadlock(tmp_path: Path) -> None:
+    """Regression: on a fresh DB no strategy_state rows exist, the 09:30 mark
+    waits for equity, equity waits for the mark — daily-loss protection never
+    activates. Startup must seed states; the equity bootstrap must produce a
+    number with no mark present."""
+    from plutus.engine import make_strategy_equity
+    from plutus.models import StrategyState
+
+    rm, adapter, factory = make_env(tmp_path)
+    runtime = EngineRuntime(
+        risk=rm,
+        session_factory=factory,
+        adapter=adapter,
+        clock=lambda: RTH,
+        strategies=["tqqq_rotation", "orb"],
+    )
+    runtime.startup()
+
+    with factory() as session:
+        states = {s.strategy: s for s in session.scalars(select(StrategyState)).all()}
+    assert set(states) >= {"tqqq_rotation", "orb"}
+    assert all(float(s.allocation_usd) > 0 for s in states.values())
+
+    # equity is computable before any 09:30 mark exists (bootstrap base)
+    equity = make_strategy_equity(factory, rm, price_lookup=lambda s: 100.0)
+    value = equity("tqqq_rotation")
+    assert value is not None
+
+    # and the mark → breach → halt chain works end to end
+    rm.mark_day_start("tqqq_rotation", equity=10_000.0)
+    rm.record_fill("tqqq_rotation", "SPY", 5)
+    rm.check_daily_loss("tqqq_rotation", current_equity=9_000.0)
+    with factory() as session:
+        state = session.scalars(
+            select(StrategyState).where(StrategyState.strategy == "tqqq_rotation")
+        ).one()
+        assert not state.enabled
+
+
+def test_error_listener_alerts_and_flags(tmp_path: Path) -> None:
+    """A job exception must alert and mark the session unclean — the ledger
+    is the 'zero unhandled errors' acceptance instrument."""
+    from plutus.engine import make_error_listener
+
+    captured: list[tuple[str, str]] = []
+    errored = {"flag": False}
+    listener = make_error_listener(
+        alert=lambda sev, msg: captured.append((sev, msg)), errored=errored
+    )
+
+    class Event:
+        job_id = "rotation_1550"
+        exception = RuntimeError("boom at 15:50")
+
+    listener(Event())
+
+    assert errored["flag"] is True
+    assert any(sev == "critical" and "rotation_1550" in msg for sev, msg in captured)
+
+
 def test_unclean_prior_session_alerts_on_next_startup(tmp_path: Path) -> None:
     alerts.clear()
     runtime, _, factory = make_runtime(tmp_path)
