@@ -66,12 +66,24 @@ def main() -> None:  # pragma: no cover - live-money manual script
     if typed != phrase:
         raise SystemExit("confirmation mismatch — nothing sent.")
 
+    def quote_price(sym: str) -> float | None:
+        # a real quote so the FULL §8 gate chain (incl. priced gates) runs on
+        # this live order — better acceptance evidence than a keyhole bypass
+        try:
+            payload = client.get_quote(sym).json()
+            entry = payload.get(sym, {})
+            quote = entry.get("quote", entry)
+            price = quote.get("lastPrice") or quote.get("mark") or quote.get("askPrice")
+            return float(price) if price else None
+        except Exception:
+            return None
+
     risk = RiskManager(
         adapter=adapter,
         session_factory=make_session_factory(make_engine()),
         settings=settings,
         effective_mode="live",
-        price_lookup=lambda _s: None,  # exits/no sizing: 1 share, stop-less manual test
+        price_lookup=quote_price,
     )
     intent = OrderIntent(
         symbol=symbol, side="buy", qty=1, order_type="market",

@@ -194,7 +194,7 @@ def test_manual_schwab_test_passes_with_both_switches(tmp_path: Path) -> None:
             strategy="manual_schwab_test",
         )
     )
-    assert row.status == "filled" or row.status == "accepted"
+    assert row.status == "accepted"  # full §8 chain incl. priced gates passed
     assert len(client.placed) == 1
 
 

@@ -170,6 +170,7 @@ class SchwabAdapter:
         return positions
 
     def submit_order(self, order: OrderIntent) -> OrderReceipt:
+        # qty truncates to whole shares (Schwab equities are whole-share)
         self._assert_fresh()
         from schwab.orders import equities
 
