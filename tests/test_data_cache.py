@@ -24,9 +24,11 @@ class CountingFakeProvider:
         self, symbol: str, interval: Interval, start: datetime, end: datetime
     ) -> pd.DataFrame:
         self.fetch_calls.append((symbol, interval, start, end))
-        # vendor stamps daily bars at 14:30 UTC (09:30 ET session open)
+        # vendor stamps daily bars at 14:30 UTC (09:30 ET session open) and,
+        # like the real one, returns nothing stamped after the request end
         days = pd.date_range(start.date(), end.date(), freq="D", tz="UTC")
         idx = days + pd.Timedelta(hours=14, minutes=30)
+        idx = idx[idx <= pd.Timestamp(end)]
         base = pd.Series(range(len(idx)), index=idx, dtype=float)
         price = 100.0 + base + (start.toordinal() % 7)  # varies with range start
         return pd.DataFrame(
@@ -100,6 +102,43 @@ def test_symbols_and_intervals_are_isolated() -> None:
     cache.get_bars("TQQQ", "1d", _day(1), _day(5))
     cache.get_bars("SPY", "1d", _day(1), _day(5))
 
+    assert len(provider.fetch_calls) == 2
+
+
+def test_final_day_bar_included_despite_vendor_session_stamps() -> None:
+    """A midnight end bound must still pull the end day's ET-stamped bar.
+
+    Regression: the vendor stamps daily bars after midnight UTC, so passing
+    the normalized bound through to the vendor silently drops the last day —
+    and coverage then poisons the cache against ever fetching it.
+    """
+    cache, _ = make_cache()
+
+    bars = cache.get_bars("TQQQ", "1d", _day(1), _day(10))
+
+    assert bars.index[-1] == pd.Timestamp("2024-01-10", tz="UTC")
+    assert len(bars) == 10
+
+
+def test_end_bound_clamped_to_last_completed_utc_day() -> None:
+    """Requesting through 'today' must not claim coverage for today's
+    still-forming bar; a later request must fetch it."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    provider = CountingFakeProvider()
+    now = {"t": datetime(2024, 1, 10, 15, 0, tzinfo=UTC)}  # mid-session Jan 10
+    cache = CachedDataProvider(
+        provider, make_session_factory(engine), clock=lambda: now["t"]
+    )
+
+    bars = cache.get_bars("TQQQ", "1d", _day(1), _day(10))
+    assert bars.index[-1] == pd.Timestamp("2024-01-09", tz="UTC")
+    assert len(provider.fetch_calls) == 1
+
+    # next day, the same request must re-fetch to pick up Jan 10
+    now["t"] = datetime(2024, 1, 11, 15, 0, tzinfo=UTC)
+    bars = cache.get_bars("TQQQ", "1d", _day(1), _day(10))
+    assert bars.index[-1] == pd.Timestamp("2024-01-10", tz="UTC")
     assert len(provider.fetch_calls) == 2
 
 

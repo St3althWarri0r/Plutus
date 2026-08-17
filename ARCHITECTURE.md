@@ -108,6 +108,11 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   (symbol, interval); requests inside coverage never touch the vendor. Daily
   timestamps normalize to UTC midnight at the cache boundary (vendors stamp
   session-open ET). Deliberately avoids exchange-calendar hole accounting.
+  Two edge rules matter because coverage never re-fetches: the vendor request
+  end is padded +1 day for daily bars (vendor stamps sit inside the session,
+  after UTC midnight — an unpadded request silently drops the final day), and
+  the end bound is clamped to the last completed UTC day (a request "through
+  today" must not claim coverage for a bar still forming).
 - Report conventions: √252/252 annualization, rf=0, Sortino = downside
   deviation over all periods (target 0), trade = contiguous nonzero-weight run
   per symbol with gross-of-cost P&L.
@@ -121,15 +126,16 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
 
 ## Verification (Phase 2 acceptance)
 
-- `uv run pytest` — 69 passed: engine equity paths asserted against explicit
+- `uv run pytest` — 71 passed: engine equity paths asserted against explicit
   hand arithmetic per fill mode; next_close ≡ same_close∘shift property;
-  costs-on-fill-day; cache hit/merge/normalization; SMA(10/30) cross matches
-  vectorbt `Portfolio.from_signals` to 1e-6 relative; run persistence
-  round-trip
+  costs-on-fill-day; cache hit/merge/normalization + final-day/clamp
+  regressions; SMA(10/30) cross matches vectorbt `Portfolio.from_signals` to
+  1e-6 relative; run persistence round-trip
 - `uv run ruff check .` / `uv run mypy` (strict) — clean
-- **Real-data smoke (2026-08-16, paper keys, IEX):** 260 TQQQ daily bars
-  2025-08-01→2026-08-13 fetched in one vendor call (0.16s); identical second
-  request served from SQLite in 3ms with zero vendor calls.
+- **Real-data smoke (2026-08-16, paper keys, IEX):** 261 TQQQ daily bars
+  2025-08-01→2026-08-14 fetched in one vendor call (0.15s); identical second
+  request served from SQLite in 3ms with zero vendor calls. (An earlier smoke
+  exposed the dropped-final-day cache bug fixed above.)
 
 ## Verification (Phase 1 acceptance)
 

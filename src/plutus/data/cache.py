@@ -11,7 +11,8 @@ stamp daily bars at session open in ET, which would make range comparisons
 timezone-brittle.
 """
 
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import delete, select
@@ -51,15 +52,27 @@ def _normalize_bound(dt: datetime, interval: Interval) -> datetime:
 class CachedDataProvider:
     """Wraps any DataProvider with the bars/bar_coverage cache."""
 
-    def __init__(self, provider: DataProvider, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        provider: DataProvider,
+        session_factory: sessionmaker[Session],
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._provider = provider
         self._session_factory = session_factory
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def get_bars(
         self, symbol: str, interval: Interval, start: datetime, end: datetime
     ) -> pd.DataFrame:
         start = _normalize_bound(start, interval)
         end = _normalize_bound(end, interval)
+        if interval == "1d":
+            # never claim coverage for a day whose bar is still forming —
+            # clamp to the last completed UTC day
+            now = self._clock().astimezone(UTC)
+            last_complete = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(days=1)
+            end = min(end, last_complete)
         with self._session_factory() as session:
             if not self._covered(session, symbol, interval, start, end):
                 self._fetch_and_store(session, symbol, interval, start, end)
@@ -82,7 +95,11 @@ class CachedDataProvider:
         self, session: Session, symbol: str, interval: Interval, start: datetime, end: datetime
     ) -> None:
         log.info("bars_fetch", symbol=symbol, interval=interval, start=str(start), end=str(end))
-        frame = self._provider.get_bars(symbol, interval, start, end)
+        # vendors stamp daily bars inside the session (after UTC midnight), so
+        # the vendor request must extend past the normalized end or the final
+        # day's bar is silently excluded
+        vendor_end = end + timedelta(days=1) if interval == "1d" else end
+        frame = self._provider.get_bars(symbol, interval, start, vendor_end)
 
         # replace any overlapping rows, then insert fresh ones (portable upsert)
         session.execute(
@@ -95,12 +112,15 @@ class CachedDataProvider:
         )
         frame_idx = pd.DatetimeIndex(frame.index)
         for i, ts in enumerate(frame_idx):
+            normalized = _normalize_ts(ts, interval)
+            if not (start <= normalized <= end):
+                continue  # padding may pull a bar past the coverage window
             row = frame.iloc[i]
             session.add(
                 Bar(
                     symbol=symbol,
                     interval=interval,
-                    ts=_normalize_ts(ts, interval),
+                    ts=normalized,
                     open=float(row["open"]),
                     high=float(row["high"]),
                     low=float(row["low"]),

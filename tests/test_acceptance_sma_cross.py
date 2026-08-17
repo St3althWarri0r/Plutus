@@ -15,11 +15,10 @@ from pytest import approx
 from plutus.backtest.costs import CostModel
 from plutus.backtest.engine import run_backtest
 
-RNG = np.random.default_rng(42)
-
 
 def make_prices(n: int = 300) -> pd.Series:
-    steps = RNG.normal(loc=0.0004, scale=0.015, size=n)
+    rng = np.random.default_rng(42)  # fresh per call: test data independent of run order
+    steps = rng.normal(loc=0.0004, scale=0.015, size=n)
     idx = pd.date_range("2020-01-01", periods=n, freq="B")
     return pd.Series(100.0 * np.exp(np.cumsum(steps)), index=idx, name="close")
 
