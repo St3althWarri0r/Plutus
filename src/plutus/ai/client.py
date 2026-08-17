@@ -46,7 +46,13 @@ class CostTable:
         return input_tokens / 1e6 * in_price + output_tokens / 1e6 * out_price
 
 
-DEFAULT_COSTS = CostTable({"claude-sonnet-4-6": (3.0, 15.0)})
+DEFAULT_COSTS = CostTable(
+    {
+        "claude-sonnet-4-6": (3.0, 15.0),
+        "claude-haiku-4-5": (1.0, 5.0),
+        "claude-haiku-4-5-20251001": (1.0, 5.0),
+    }
+)
 
 
 def make_anthropic_transport(api_key: str) -> Transport:  # pragma: no cover - smoke
@@ -86,11 +92,25 @@ class AiClient:
         user: str,
         schema: type[S],
         max_tokens: int = 1024,
+        model: str | None = None,
+        cache_system: bool = False,
     ) -> S | None:
-        """Two attempts max; None means no-op (§9: malformed → retry → no-op)."""
+        """Two attempts max; None means no-op (§9: malformed → retry → no-op).
+
+        model overrides the default per call (§9B.6 tiering: Haiku monitor,
+        Sonnet decisions). cache_system marks the system prompt as a cached
+        content block — at hundreds of monitor calls/day this is the
+        difference between cents and dollars.
+        """
         for attempt in (1, 2):
             result = self._attempt(
-                mode=mode, system=system, user=user, schema=schema, max_tokens=max_tokens
+                mode=mode,
+                system=system,
+                user=user,
+                schema=schema,
+                max_tokens=max_tokens,
+                model=model or self.model,
+                cache_system=cache_system,
             )
             if result is not None:
                 return result
@@ -100,7 +120,15 @@ class AiClient:
         return None
 
     def _attempt(
-        self, *, mode: str, system: str, user: str, schema: type[S], max_tokens: int
+        self,
+        *,
+        mode: str,
+        system: str,
+        user: str,
+        schema: type[S],
+        max_tokens: int,
+        model: str,
+        cache_system: bool = False,
     ) -> S | None:
         tool = {
             "name": "decide",
@@ -115,11 +143,16 @@ class AiClient:
         raw_payload: dict[str, Any] | None = None
         error: str | None = None
         decision: S | None = None
+        system_param: Any = system
+        if cache_system:
+            system_param = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
         try:
             response = self._transport(
-                model=self.model,
+                model=model,
                 max_tokens=max_tokens,
-                system=system,
+                system=system_param,
                 messages=[{"role": "user", "content": user}],
                 tools=[tool],
                 tool_choice={"type": "tool", "name": "decide"},
@@ -136,7 +169,7 @@ class AiClient:
         input_tokens = getattr(usage, "input_tokens", None)
         output_tokens = getattr(usage, "output_tokens", None)
         cost = (
-            self._costs.cost(self.model, input_tokens, output_tokens)
+            self._costs.cost(model, input_tokens, output_tokens)
             if input_tokens is not None and output_tokens is not None
             else None
         )
@@ -145,7 +178,7 @@ class AiClient:
             session.add(
                 AiAudit(
                     mode=mode,
-                    model=self.model,
+                    model=model,
                     prompt_hash=prompt_hash,
                     prompt_text=prompt_text,
                     # verbatim (§9): the malformed payload is stored too —

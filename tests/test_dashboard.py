@@ -184,6 +184,49 @@ def test_strategy_panel_lists_state_and_enable_endpoint_reenables() -> None:
     assert resp.status_code == 400
 
 
+def test_mode_b_stats_page_shows_criteria_and_cost() -> None:
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from plutus.models import AiAudit, ModeBTrade
+
+    adapter = FakeAdapter()
+    client, factory = make_client(adapter)
+    with factory() as session:
+        session.add(
+            ModeBTrade(
+                session_date=_dt(2026, 8, 17, tzinfo=_UTC).date(),
+                symbol="NVDA",
+                setup="gap_and_go",
+                qty=100,
+                entry_price=100.0,
+                stop_price=99.0,
+                opened_at=_dt(2026, 8, 17, 14, 0, tzinfo=_UTC),
+                closed_at=_dt(2026, 8, 17, 15, 0, tzinfo=_UTC),
+                realized_r=1.5,
+            )
+        )
+        session.add(
+            AiAudit(
+                mode="decision",
+                model="claude-sonnet-4-6",
+                prompt_hash="h",
+                prompt_text="p",
+                cost_usd=0.012,
+                latency_ms=3000,
+                created_at=_dt(2026, 8, 17, 14, 0, tzinfo=_UTC),
+            )
+        )
+        session.commit()
+
+    page = client.get("/mode-b")
+    assert page.status_code == 200
+    assert "PAPER" in page.text  # the lock banner
+    assert "gap_and_go" in page.text
+    assert "1.50" in page.text or "+1.50" in page.text  # expectancy/trade R
+    assert "0.01" in page.text  # $/day cost visible (§9B.6 acceptance)
+
+
 def test_missing_credentials_renders_notice_instead_of_crashing() -> None:
     client, _ = make_client(None)
 

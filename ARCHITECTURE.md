@@ -3,7 +3,42 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 6 (AI Mode A) built — outage drill green; 30-session clock running
+## Status: Phase 6b (Mode B day trader) built — acceptance session runs Monday; 30-session clock running
+
+## Phase 6b decisions
+
+- **Scanner thresholds are IEX-scaled (§9B.1 deviation, probe-calibrated):**
+  the free feed carries ~2-3% of consolidated volume (Friday probe: NVDA
+  premarket = 25k IEX shares vs millions consolidated). Spec's 200k pm-volume
+  / 1M ADV filters would pass nothing; playbook.yaml carries honest names
+  (premarket_volume_min_iex: 5000, adv_min_iex: 30000). The 10 bps spread
+  filter is omitted (IEX quotes ≠ NBBO). Candidates: static momentum list
+  (screener most-actives/movers verified working, wired later if wanted).
+- **Discipline (§9B.4) is all deterministic code** (ai/discipline.py),
+  counters persisted per session (mode_b_state) so restarts can't reset
+  round trips or an active cooldown. Breakeven-at-+1R and the mandatory
+  ≥1/3 scale-out at +2R run in the 15s position loop with NO AI call.
+  Layering: at $25k allocation 1R=$187.50, daily stop −2.5R≈$469 triggers
+  inside §8's −3% ($750) halt — Mode B's stop is the tighter inner gate.
+- **Every entry is a bracket in code** — no stop → rejected before any broker
+  call; setups are a closed set from playbook.yaml (pyyaml, spec-mandated
+  §9B.5, flagged per the uvicorn precedent). move_stop is a documented §3
+  adapter extension (replace the stop leg); management failure → critical
+  alert and the position stays under its ORIGINAL bracket, never naked.
+- **Tiering (§9B.6):** Haiku-class monitor per watchlist-minute escalates to
+  Sonnet decisions; system+playbook prompt is cache_control'd; monitor/
+  position jobs run max_instances=1+coalesce so a slow decision skips ticks.
+  p95 decision latency >12s alerts (from ai_audit). Cost/day on /mode-b.
+- **Paper lock (§9B.7):** engine raises at startup if Mode B + live mode.
+  /mode-b shows the promotion-bar stats live (sessions, trades, PF,
+  expectancy R, worst-day R, $/day); the lock is the user's to lift, later.
+- **Live probe finding:** the user's Anthropic key authenticates but the
+  account has NO API credits (400 at billing) — every AI call currently
+  no-ops through the §9 outage paths. Model-ID validity (claude-sonnet-4-6)
+  unverified until credits exist; re-run the probe then.
+- Deferred with notes: weekly self-review proposals, halt/resume events (no
+  free source), RVOL/premarket levels in the packet (fields exist, wiring
+  v2), screener-fed candidates.
 
 ## System shape (target)
 

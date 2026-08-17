@@ -1,0 +1,56 @@
+# Mode B playbook (§9B.5). The agent's discretion is WHICH setup, WHEN, and
+# WHETHER — it names one of these on every entry and cannot invent new ones.
+# New setups get added here, not in code.
+
+setups:
+  opening_range_breakout:
+    description: Break above the 5m/15m opening range high on above-average volume.
+    entry: First 1m close above the opening range high after the range completes.
+    stop: Opening range low.
+    target: 2R minimum; trail beyond.
+  gap_and_go:
+    description: Gap >2% holding above pre-market low, continuing in gap direction.
+    entry: Break of pre-market high after 09:30 with RVOL > 1.5.
+    stop: Below pre-market low or the first 5m low, whichever is tighter.
+    target: 2R; scale at gap extension levels.
+  vwap_reclaim:
+    description: Price reclaims VWAP from below after a morning flush.
+    entry: 1m close above VWAP after at least 15 minutes below it.
+    stop: Low of the reclaim bar.
+    target: HOD retest; 2R minimum.
+  first_pullback:
+    description: First orderly pullback in an established intraday uptrend.
+    entry: Break of the pullback's minor high with EMA9 > EMA20.
+    stop: Pullback low.
+    target: Measured move of the prior leg; 2R minimum.
+  failed_breakdown_reversal:
+    description: Flush through a key level (prior day low / PM low) that immediately reclaims.
+    entry: 1m close back above the broken level within 3 bars of the flush.
+    stop: Flush low.
+    target: Opposite side of the range; 2R minimum.
+
+scanner:
+  # thresholds are IEX-SCALED (§9B.1 deviation): our feed carries ~2-3% of
+  # consolidated volume, so the spec's consolidated-tape numbers (200k pm
+  # volume, 1M ADV) are divided accordingly. Calibrated by probe 2026-08-14.
+  min_gap_pct: 2.0
+  premarket_volume_min_iex: 5000
+  adv_min_iex: 30000
+  price_min: 5.0
+  price_max: 500.0
+  static_candidates: [NVDA, TSLA, AMD, PLTR, SMCI, COIN, MARA, HOOD, MSTR, RIOT]
+  max_watchlist: 6
+
+mode_b:
+  allocation_fraction_r: 0.0075   # 1R = 0.75% of Mode B allocation (§9B.4)
+  max_concurrent: 2
+  max_round_trips_per_day: 8
+  daily_stop_r: -2.5
+  anti_tilt_consecutive_losses: 2
+  anti_tilt_cooldown_minutes: 30
+  breakeven_at_r: 1.0
+  scale_out_at_r: 2.0
+  scale_out_fraction: 0.34
+  off_plan_trades_per_day: 1
+  off_plan_size_factor: 0.5
+  no_new_entries_after: "15:30"

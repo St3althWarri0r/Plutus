@@ -132,6 +132,32 @@ class AlpacaAdapter:
     def cancel_order(self, broker_order_id: str) -> None:
         self._client.cancel_order_by_id(broker_order_id)
 
+    def replace_stop(self, parent_broker_order_id: str, new_stop: float) -> None:
+        """Documented §3 extension (Mode B bracket management): replace the
+        stop leg's price on a live bracket. Raises when no stop leg is found —
+        callers alert and leave the position under its original bracket."""
+        from alpaca.trading.requests import GetOrderByIdRequest, ReplaceOrderRequest
+
+        parent = self._client.get_order_by_id(
+            parent_broker_order_id, options=GetOrderByIdRequest(nested=True)
+        )
+        legs = getattr(parent, "legs", None) or []
+        stop_leg = next(
+            (
+                leg
+                for leg in legs
+                if "stop" in str(getattr(leg, "order_type", "")).lower()
+            ),
+            None,
+        )
+        if stop_leg is None:
+            raise RuntimeError(
+                f"no stop leg found on order {parent_broker_order_id} — cannot move stop"
+            )
+        self._client.replace_order_by_id(
+            str(stop_leg.id), ReplaceOrderRequest(stop_price=new_stop)
+        )
+
     def get_order_status(self, broker_order_id: str) -> OrderStatus:
         return _to_status(self._client.get_order_by_id(broker_order_id).status)
 

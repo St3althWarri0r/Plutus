@@ -169,6 +169,43 @@ def test_bracket_order_maps_stop_and_take_profit_legs() -> None:
     assert req.take_profit.limit_price == 107.8
 
 
+def test_replace_stop_finds_stop_leg_and_replaces() -> None:
+    client = FakeTradingClient()
+    replaced: list[tuple[str, Any]] = []
+
+    class StopLeg:
+        id = "leg-stop-1"
+        order_type = "stop"
+
+    class TpLeg:
+        id = "leg-tp-1"
+        order_type = "limit"
+
+    client.get_order_by_id = lambda order_id, options=None: SimpleNamespace(  # type: ignore[method-assign, misc]
+        id=order_id, legs=[TpLeg(), StopLeg()]
+    )
+    client.replace_order_by_id = lambda order_id, order_data: replaced.append(  # type: ignore[attr-defined]
+        (order_id, order_data)
+    )
+    adapter = AlpacaAdapter(client)
+
+    adapter.replace_stop("parent-1", 101.5)
+
+    ((leg_id, request),) = replaced
+    assert leg_id == "leg-stop-1"
+    assert request.stop_price == 101.5  # ReplaceOrderRequest carries the new stop
+
+
+def test_replace_stop_raises_when_no_stop_leg() -> None:
+    client = FakeTradingClient()
+    client.get_order_by_id = lambda order_id, options=None: SimpleNamespace(  # type: ignore[method-assign, misc]
+        id=order_id, legs=None
+    )
+    adapter = AlpacaAdapter(client)
+    with pytest.raises(RuntimeError, match="stop leg"):
+        adapter.replace_stop("parent-1", 101.5)
+
+
 # --- chaos: API timeout mid-order (CLAUDE.md rule 7) --------------------------
 
 

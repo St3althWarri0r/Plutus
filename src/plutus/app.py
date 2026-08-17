@@ -225,6 +225,40 @@ def create_app(
             f"{row.symbol} {row.side} {row.qty} — {row.status}{detail}</p>"
         )
 
+    @app.get("/mode-b", response_class=HTMLResponse)
+    def mode_b_stats(request: Request) -> HTMLResponse:
+        """§9B.7 promotion-bar stats, live. The lock stays until the user
+        flips it by hand — this page only reports."""
+        from sqlalchemy import func as sqlfunc
+
+        from plutus.ai.mode_b_accounting import compute_stats
+        from plutus.models import AiAudit, ModeBTrade
+
+        stats = compute_stats(factory)
+        with factory() as session:
+            recent = session.scalars(
+                select(ModeBTrade).order_by(ModeBTrade.id.desc()).limit(20)
+            ).all()
+            cost_rows = session.execute(
+                select(
+                    sqlfunc.date(AiAudit.created_at),
+                    sqlfunc.coalesce(sqlfunc.sum(AiAudit.cost_usd), 0),
+                )
+                .group_by(sqlfunc.date(AiAudit.created_at))
+                .order_by(sqlfunc.date(AiAudit.created_at).desc())
+                .limit(10)
+            ).all()
+        return templates.TemplateResponse(
+            request,
+            "mode_b.html",
+            {
+                "trading_mode": effective_trading_mode(),
+                "stats": stats,
+                "trades": recent,
+                "costs": [(str(d), float(c)) for d, c in cost_rows],
+            },
+        )
+
     @app.post("/kill", response_class=HTMLResponse)
     async def kill(request: Request) -> HTMLResponse:
         if risk is None:

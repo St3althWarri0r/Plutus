@@ -23,6 +23,8 @@ class FakeAdapter:
         self.positions: list[Position] = []
         self.canceled: list[str] = []
         self.fills: list[Fill] = []
+        self.replaced: list[tuple[str, float]] = []
+        self.replace_fail_with: Exception | None = None
 
     def get_account(self) -> AccountState:
         return AccountState(equity=1000.0, cash=1000.0, buying_power=2000.0)
@@ -53,3 +55,8 @@ class FakeAdapter:
 
     def get_fills(self, since: datetime) -> list[Fill]:
         return [f for f in self.fills if f.filled_at >= since]
+
+    def replace_stop(self, parent_broker_order_id: str, new_stop: float) -> None:
+        if self.replace_fail_with is not None:
+            raise self.replace_fail_with
+        self.replaced.append((parent_broker_order_id, new_stop))

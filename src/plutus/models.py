@@ -199,6 +199,50 @@ class AiAudit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DayPlan(Base):
+    """Mode B's morning plan (§9B.1) — persisted, anchoring the session."""
+
+    __tablename__ = "day_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_date: Mapped[date] = mapped_column(Date, unique=True)
+    plan_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModeBState(Base):
+    """Session tape + discipline counters (§9B.3/9B.4) — survives restarts."""
+
+    __tablename__ = "mode_b_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_date: Mapped[date] = mapped_column(Date, unique=True)
+    tape_text: Mapped[str] = mapped_column(Text, default="")
+    counters_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ModeBTrade(Base):
+    """One Mode B round trip (§9B.7 stats source — not derived from fills)."""
+
+    __tablename__ = "mode_b_trades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_date: Mapped[date] = mapped_column(Date)
+    symbol: Mapped[str] = mapped_column(String(16))
+    setup: Mapped[str] = mapped_column(String(48))
+    off_plan: Mapped[bool] = mapped_column(default=False)
+    qty: Mapped[float] = mapped_column(Numeric(24, 10))
+    entry_price: Mapped[float] = mapped_column(Numeric(18, 4))
+    stop_price: Mapped[float] = mapped_column(Numeric(18, 4))
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    exit_price: Mapped[float | None] = mapped_column(Numeric(18, 4), default=None)
+    realized_r: Mapped[float | None] = mapped_column(Numeric(10, 4), default=None)
+
+
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
 

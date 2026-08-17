@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plutus — Mode B</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
+    .mode-banner { padding: 1rem; text-align: center; font-size: 2rem; font-weight: 800; letter-spacing: 0.3em; }
+    .mode-paper { background: #14532d; color: #bbf7d0; }
+    .mode-live { background: #7f1d1d; color: #fecaca; }
+    main { padding: 2rem; max-width: 960px; margin: 0 auto; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
+    th, td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid #2a2e37; }
+    .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    .card { background: #191d24; border: 1px solid #2a2e37; border-radius: 8px; padding: 1rem 1.5rem; min-width: 9rem; }
+    .card .label { color: #8b93a3; font-size: 0.8rem; text-transform: uppercase; }
+    .card .value { font-size: 1.4rem; font-weight: 700; margin-top: 0.25rem; }
+    .muted { color: #8b93a3; }
+  </style>
+</head>
+<body>
+  <div class="mode-banner {% if trading_mode == 'live' %}mode-live{% else %}mode-paper{% endif %}">
+    {{ trading_mode | upper }} — MODE B LOCKED TO PAPER
+  </div>
+  <main>
+    <h1>Mode B — day trader stats (§9B.7 promotion bar)</h1>
+    <p class="muted">Bar: ≥60 sessions AND ≥100 trades; PF ≥ 1.3; expectancy ≥ +0.15R;
+      daily stop never breached; zero gate violations. The lock comes off only by hand.</p>
+    <div class="cards">
+      <div class="card"><div class="label">Sessions</div><div class="value">{{ stats.sessions }}</div></div>
+      <div class="card"><div class="label">Trades</div><div class="value">{{ stats.trades }}</div></div>
+      <div class="card"><div class="label">Profit factor</div>
+        <div class="value">{{ "%.2f"|format(stats.profit_factor) if stats.profit_factor is not none else "—" }}</div></div>
+      <div class="card"><div class="label">Expectancy</div>
+        <div class="value">{{ "%+.2f"|format(stats.expectancy_r) if stats.expectancy_r is not none else "—" }}R</div></div>
+      <div class="card"><div class="label">Worst day</div>
+        <div class="value">{{ "%+.2f"|format(stats.worst_day_r) if stats.worst_day_r is not none else "—" }}R</div></div>
+    </div>
+
+    <h2>AI cost per day</h2>
+    <table>
+      <thead><tr><th>Date</th><th>Cost (USD)</th></tr></thead>
+      <tbody>
+        {% for d, c in costs %}
+        <tr><td>{{ d }}</td><td>${{ "%.4f"|format(c) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Recent trades</h2>
+    <table>
+      <thead><tr><th>Date</th><th>Symbol</th><th>Setup</th><th>Qty</th><th>Entry</th><th>R</th></tr></thead>
+      <tbody>
+        {% for t in trades %}
+        <tr>
+          <td>{{ t.session_date }}</td>
+          <td>{{ t.symbol }}</td>
+          <td>{{ t.setup }}{{ " (off-plan)" if t.off_plan else "" }}</td>
+          <td>{{ t.qty }}</td>
+          <td>${{ "%.2f"|format(t.entry_price) }}</td>
+          <td>{{ "%+.2f"|format(t.realized_r) if t.realized_r is not none else "open" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><a href="/" style="color:#bbf7d0">← dashboard</a></p>
+  </main>
+</body>
+</html>

@@ -513,6 +513,326 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
             id="journal_1630",
         )
 
+    # --- Mode B (§9B): requires the AI key; hard-locked to paper ---------------
+    if mode_a is not None and settings.anthropic_api_key:
+        from plutus.ai.discipline import Discipline, OpenPosition
+        from plutus.ai.mode_b import (
+            ModeB,
+            ModeBExecutor,
+            assert_mode_b_paper_locked,
+        )
+        from plutus.ai.mode_b_accounting import (
+            p95_decision_latency_ms,
+            session_pnl_r,
+            sync_mode_b_trades,
+        )
+        from plutus.ai.mode_b_config import load_playbook as _load_playbook
+        from plutus.ai.packet import build_state_packet
+        from plutus.ai.scanner import Candidate, filter_candidates
+        from plutus.models import ModeBTrade
+
+        assert_mode_b_paper_locked(effective_mode=effective_trading_mode())
+        playbook = _load_playbook(resolve_runtime_root(settings) / "playbook.yaml")
+        risk.config.intraday_strategies.add("mode_b")
+        risk.config.max_position_pct_overrides.setdefault("mode_b", 1.0)
+        mode_b = ModeB(
+            client=ai_client, session_factory=factory, playbook=playbook
+        )
+        with factory() as session:
+            mb_state = session.scalars(
+                select(StrategyState).where(StrategyState.strategy == "mode_b")
+            ).one_or_none()
+            mb_allocation = (
+                float(mb_state.allocation_usd)
+                if mb_state is not None and float(mb_state.allocation_usd) > 0
+                else risk.config.default_allocation_usd
+            )
+        discipline = Discipline(playbook.mode_b, allocation_usd=mb_allocation)
+        executor = ModeBExecutor(
+            mode_b=mode_b,
+            discipline=discipline,
+            risk=risk,
+            adapter=adapter,
+            alert=alerter,
+        )
+
+        def _open_mode_b_positions() -> list[OpenPosition]:
+            with factory() as session:
+                rows = session.scalars(
+                    select(ModeBTrade).where(ModeBTrade.closed_at.is_(None))
+                ).all()
+                return [
+                    OpenPosition(
+                        symbol=t.symbol,
+                        qty=float(t.qty),
+                        entry=float(t.entry_price),
+                        stop=float(t.stop_price),
+                        target=float(t.entry_price)
+                        + 2 * abs(float(t.entry_price) - float(t.stop_price)),
+                        setup=t.setup,
+                        off_plan=t.off_plan,
+                        opened_at=t.opened_at,
+                    )
+                    for t in rows
+                ]
+
+        def _prices_for(symbols: set[str]) -> dict[str, float]:
+            out: dict[str, float] = {}
+            for s in symbols:
+                p = latest_minute_price(s)
+                if p is not None:
+                    out[s] = p
+            return out
+
+        def _planned_symbols() -> set[str]:
+            plan = mode_b.load_plan()
+            return {e.symbol for e in plan.watchlist} if plan is not None else set()
+
+        def _mode_b_packet(symbol: str) -> str | None:
+            now = datetime.now(UTC)
+            session_open = datetime(now.year, now.month, now.day, 13, 30, tzinfo=UTC)
+            try:
+                bars_1m = provider.get_bars(symbol, "1m", session_open, now)
+            except Exception:
+                return None
+            if not len(bars_1m):
+                return None
+            bars_5m = bars_1m.resample("5min").agg(
+                {"open": "first", "high": "max", "low": "min", "close": "last",
+                 "volume": "sum"}
+            ).dropna()
+            typical = (bars_1m["high"] + bars_1m["low"] + bars_1m["close"]) / 3
+            vwap = float(
+                (typical * bars_1m["volume"]).sum() / max(bars_1m["volume"].sum(), 1)
+            )
+            closes = bars_1m["close"]
+            ema9 = float(closes.ewm(span=9, adjust=False).mean().iloc[-1])
+            ema20 = float(closes.ewm(span=20, adjust=False).mean().iloc[-1])
+            positions = _open_mode_b_positions()
+            mine = next((p for p in positions if p.symbol == symbol), None)
+            tape, counters = mode_b.load_state()
+            plan = mode_b.load_plan()
+            prices = _prices_for({symbol})
+            pnl = session_pnl_r(
+                factory,
+                r_dollars=discipline.r_dollars(),
+                current_prices=prices,
+                today=now.astimezone(ET).date(),
+            )
+            return build_state_packet(
+                symbol=symbol,
+                bars_1m=bars_1m,
+                bars_5m=bars_5m,
+                vwap=vwap,
+                rvol=None,
+                ema9=ema9,
+                ema20=ema20,
+                premarket_high=None,
+                premarket_low=None,
+                prior_high=None,
+                prior_low=None,
+                prior_close=None,
+                position=(
+                    {"qty": mine.qty, "entry": mine.entry, "stop": mine.stop}
+                    if mine
+                    else None
+                ),
+                open_orders=[],
+                session_pnl_r=pnl,
+                trades_today=counters.round_trips,
+                time_et=now.astimezone(ET).strftime("%H:%M"),
+                day_plan=plan.model_dump_json() if plan else "no plan",
+                tape=tape,
+            )
+
+        def mode_b_plan_job() -> None:
+            candidates: list[Candidate] = []
+            for symbol in playbook.scanner.static_candidates:
+                try:
+                    now = datetime.now(UTC)
+                    daily = cache.get_bars(symbol, "1d", now - timedelta(days=40), now)
+                    if len(daily) < 2:
+                        continue
+                    prior_close = float(daily["close"].iloc[-1])
+                    pm_start = datetime(now.year, now.month, now.day, 8, 0, tzinfo=UTC)
+                    pm = provider.get_bars(symbol, "1m", pm_start, now)
+                    if not len(pm):
+                        continue
+                    last = float(pm["close"].iloc[-1])
+                    candidates.append(
+                        Candidate(
+                            symbol=symbol,
+                            gap_pct=(last / prior_close - 1) * 100,
+                            premarket_volume=float(pm["volume"].sum()),
+                            price=last,
+                            adv_iex=float(daily["volume"].tail(20).mean()),
+                        )
+                    )
+                except Exception as exc:
+                    log.warning("scan_symbol_failed", symbol=symbol, error=str(exc))
+            watchlist = filter_candidates(candidates, playbook.scanner)[
+                : playbook.scanner.max_watchlist
+            ]
+            text = "\n".join(
+                f"{c.symbol}: gap {c.gap_pct:+.1f}%, pm vol {int(c.premarket_volume)} "
+                f"(IEX), ${c.price:.2f}"
+                for c in watchlist
+            ) or "no candidates passed filters"
+            regime = mode_a.todays_regime() if mode_a else "neutral"
+            plan = mode_b.plan_day(
+                candidates_text=text, context=f"Mode A regime: {regime}"
+            )
+            if plan is None:
+                alerter("critical", "Mode B day plan failed — standing down today")
+            else:
+                alerter(
+                    "info",
+                    f"Mode B plan: {[e.symbol for e in plan.watchlist]}",
+                )
+
+        def mode_b_monitor_job() -> None:
+            """Per-minute: Haiku monitor per watchlist name; escalate to a
+            Sonnet decision only when actionable (§9B.6 tiering)."""
+            now_et = datetime.now(UTC).astimezone(ET)
+            if (now_et.hour, now_et.minute) < (9, 30):
+                return
+            tape, counters = mode_b.load_state()
+            positions = _open_mode_b_positions()
+            symbols = _planned_symbols() - {p.symbol for p in positions}
+            for symbol in sorted(symbols):
+                packet = _mode_b_packet(symbol)
+                if packet is None:
+                    continue
+                verdict = mode_b.monitor(packet)
+                if verdict is None or not verdict.actionable:
+                    continue
+                decision = mode_b.decide(packet)
+                if decision is None:
+                    continue
+                prices = _prices_for({symbol})
+                executor.execute(
+                    decision,
+                    counters=counters,
+                    open_positions=positions,
+                    session_pnl_r=session_pnl_r(
+                        factory,
+                        r_dollars=discipline.r_dollars(),
+                        current_prices=prices,
+                        today=now_et.date(),
+                    ),
+                    planned_symbols=_planned_symbols(),
+                    current_prices=prices,
+                )
+            mode_b.save_state(*mode_b.load_state())
+
+        def mode_b_position_job() -> None:
+            """Every 15s: deterministic mechanics first (§9B.4 — no AI in the
+            loop), then closures, daily stop, and an AI check per position."""
+            positions = _open_mode_b_positions()
+            _, counters = mode_b.load_state()
+            if not positions:
+                sync_mode_b_trades(
+                    factory, discipline=discipline, counters=counters,
+                    now=datetime.now(UTC),
+                )
+                mode_b.save_state(mode_b.load_state()[0], counters)
+                return
+            prices = _prices_for({p.symbol for p in positions})
+            for position in positions:
+                price = prices.get(position.symbol)
+                if price is None:
+                    continue
+                for action in discipline.forced_actions(
+                    position, current_price=price, counters=counters
+                ):
+                    if action.kind == "move_stop_breakeven":
+                        parent = executor._find_parent_order_id(position.symbol)
+                        if parent is not None and action.new_stop is not None:
+                            executor.move_stop(
+                                position.symbol,
+                                parent_order_id=parent,
+                                new_stop=action.new_stop,
+                            )
+                            counters.breakeven_done.append(position.symbol)
+                    elif action.kind == "scale_out" and action.qty >= 1:
+                        risk.submit(
+                            OrderIntent(
+                                symbol=position.symbol,
+                                side="sell" if position.qty > 0 else "buy",
+                                qty=action.qty,
+                                order_type="market",
+                                strategy="mode_b",
+                            )
+                        )
+                        counters.scale_out_done.append(position.symbol)
+            now = datetime.now(UTC)
+            sync_mode_b_trades(
+                factory, discipline=discipline, counters=counters, now=now
+            )
+            pnl = session_pnl_r(
+                factory,
+                r_dollars=discipline.r_dollars(),
+                current_prices=prices,
+                today=now.astimezone(ET).date(),
+            )
+            if pnl <= playbook.mode_b.daily_stop_r:
+                alerter(
+                    "critical",
+                    f"Mode B daily stop hit ({pnl:.2f}R) — flattening, done for the day",
+                )
+                risk.flatten_strategy("mode_b", reason=f"daily stop ({pnl:.2f}R)")
+            mode_b.save_state(mode_b.load_state()[0], counters)
+
+        def mode_b_journal_job() -> None:
+            now = datetime.now(UTC)
+            today = now.astimezone(ET).date()
+            with factory() as session:
+                trades = session.scalars(
+                    select(ModeBTrade).where(ModeBTrade.session_date == today)
+                ).all()
+                lines = [
+                    f"{t.symbol} {t.setup}{' (off-plan)' if t.off_plan else ''}: "
+                    f"{float(t.realized_r):+.2f}R"
+                    if t.realized_r is not None
+                    else f"{t.symbol} {t.setup}: still open"
+                    for t in trades
+                ]
+            tape, _ = mode_b.load_state()
+            mode_b.journal(
+                "Trades:\n" + ("\n".join(lines) or "none") + f"\n\nTape:\n{tape}"
+            )
+            p95 = p95_decision_latency_ms(factory, today=today)
+            if p95 is not None and p95 > 12_000:
+                alerter("warning", f"Mode B p95 decision latency {p95}ms (> 12s budget)")
+
+        scheduler.add_job(
+            session_gated(mode_b_plan_job, clock=lambda: datetime.now(UTC)),
+            CronTrigger(hour=8, minute=50, timezone="America/New_York"),
+            id="mode_b_plan_0850",
+        )
+        scheduler.add_job(
+            mode_b_monitor_job,
+            CronTrigger(
+                hour="9-15", minute="*", timezone="America/New_York"
+            ),
+            id="mode_b_monitor",
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            mode_b_position_job,
+            IntervalTrigger(seconds=15),
+            id="mode_b_positions",
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            session_gated(mode_b_journal_job, clock=lambda: datetime.now(UTC)),
+            CronTrigger(hour=16, minute=15, timezone="America/New_York"),
+            id="mode_b_journal_1615",
+        )
+        log.info("mode_b_enabled", allocation=mb_allocation)
+
     errored = {"flag": False}
     scheduler.add_listener(
         make_error_listener(alert=alerter, errored=errored), EVENT_JOB_ERROR
