@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     plaid_env: str = "production"
 
     anthropic_api_key: str | None = None
+    ai_model: str = "claude-sonnet-4-6"  # §9: config-switchable decision model
 
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None

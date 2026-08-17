@@ -15,13 +15,17 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import FrameType
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from plutus.brokers.base import BrokerAdapter
+from plutus.brokers.base import BrokerAdapter, OrderIntent
+
+if TYPE_CHECKING:
+    from plutus.ai.mode_a import ModeA
 from plutus.execution import append_provisional_close, compute_rebalance_orders
 from plutus.logging_setup import configure_logging, get_logger
 from plutus.models import BotPosition, EngineSession, StrategyState
@@ -38,6 +42,29 @@ ET = ZoneInfo("America/New_York")
 # --- strategy job functions (pure-ish, composed by the runtime) ---------------
 
 
+def _review_entry(
+    risk: RiskManager, intent: "OrderIntent", mode_a: "ModeA | None", context: str
+) -> "OrderIntent | None":
+    """Mode A review for one ENTRY (§9). Exits never reach this function —
+    that is 9.4's 'never blocks risk-reducing exits' enforced structurally.
+    A failed/timed-out review proceeds at 0.5× with a critical alert: a
+    silently degraded supervisor must never pass unnoticed."""
+    from plutus.ai.mode_a import apply_review
+
+    if mode_a is None:
+        return intent  # Mode A not enabled: Phase 5 behavior, full size
+    review = mode_a.trade_review(intent, context=context)
+    if review is None:
+        risk._alert(
+            "critical",
+            f"AI review unavailable for {intent.symbol} — proceeding at 0.5× (§9.4)",
+        )
+    result = apply_review(intent, review)
+    if result is None and review is not None and review.action == "veto":
+        risk.record_veto(intent, review.rationale)
+    return result
+
+
 def run_daily_rotation(
     risk: RiskManager,
     *,
@@ -45,8 +72,11 @@ def run_daily_rotation(
     closes: pd.DataFrame,
     latest_prices: dict[str, float],
     allocation: float,
+    mode_a: "ModeA | None" = None,
 ) -> None:
-    """The 15:50 ET job: provisional close → weights → rebalance orders."""
+    """The 15:50 ET job: provisional close → weights → rebalance orders.
+    Buys are entries (reviewed); the rotation never shorts, so sells are
+    always risk-reducing exits and skip review."""
     frame = append_provisional_close(
         closes, latest_prices=latest_prices, now=risk._clock().astimezone(UTC)
     )
@@ -64,6 +94,13 @@ def run_daily_rotation(
         strategy=strategy.name,
     )
     for intent in orders:
+        if intent.side == "buy":
+            reviewed = _review_entry(
+                risk, intent, mode_a, context=f"daily rotation rebalance to {dict(weights)}"
+            )
+            if reviewed is None:
+                continue
+            intent = reviewed
         risk.submit(intent)
 
 
@@ -71,11 +108,17 @@ def run_orb_tick(
     risk: RiskManager,
     orb: OpeningRangeBreakout,
     minute_bars_by_symbol: dict[str, pd.DataFrame],
+    mode_a: "ModeA | None" = None,
 ) -> None:
     for symbol, bars in minute_bars_by_symbol.items():
         intent = orb.on_minute(symbol, bars)
-        if intent is not None:
-            risk.submit(intent)
+        if intent is None:
+            continue
+        reviewed = _review_entry(
+            risk, intent, mode_a, context=f"ORB breakout entry, stop {intent.stop_price}"
+        )
+        if reviewed is not None:
+            risk.submit(reviewed)
 
 
 # --- runtime ------------------------------------------------------------------
@@ -271,6 +314,24 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
 
     strategy_equity = make_strategy_equity(factory, risk, price_lookup=latest_minute_price)
 
+    # Mode A: enabled only when the key is configured; absent key = Phase 5
+    # behavior at full size (§9.4's 0.5× fallback is for outages of a
+    # CONFIGURED supervisor, not for the feature being off)
+    mode_a: ModeA | None = None
+    if settings.anthropic_api_key:
+        from plutus.ai.client import AiClient, make_anthropic_transport
+        from plutus.ai.mode_a import ModeA as _ModeA
+
+        ai_client = AiClient(
+            session_factory=factory,
+            transport=make_anthropic_transport(settings.anthropic_api_key),
+            model=settings.ai_model,
+        )
+        mode_a = _ModeA(client=ai_client, session_factory=factory)
+        log.info("mode_a_enabled", model=settings.ai_model)
+    else:
+        log.info("mode_a_disabled_no_key")
+
     runtime = EngineRuntime(
         risk=risk,
         session_factory=factory,
@@ -308,8 +369,17 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                 if state is not None and float(state.allocation_usd) > 0
                 else risk.config.default_allocation_usd
             )
+        if mode_a is not None:
+            from plutus.ai.mode_a import regime_allocation_multiplier
+
+            allocation *= regime_allocation_multiplier(mode_a.todays_regime())
         run_daily_rotation(
-            risk, strategy=rotation, closes=closes, latest_prices=priced, allocation=allocation
+            risk,
+            strategy=rotation,
+            closes=closes,
+            latest_prices=priced,
+            allocation=allocation,
+            mode_a=mode_a,
         )
 
     def orb_job() -> None:
@@ -323,7 +393,7 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                     bars[symbol] = frame
             except Exception as exc:
                 log.warning("orb_bars_unavailable", symbol=symbol, error=str(exc))
-        run_orb_tick(risk, orb, bars)
+        run_orb_tick(risk, orb, bars, mode_a=mode_a)
 
     def fills_job() -> None:
         risk.sync_fills()
@@ -360,6 +430,69 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
     )
     scheduler.add_job(fills_job, IntervalTrigger(seconds=20), id="fills_sync")
     scheduler.add_job(loss_watch_job, IntervalTrigger(seconds=60), id="loss_watch")
+
+    if mode_a is not None:
+        active_mode_a = mode_a  # narrowed binding for the job closures
+
+        def brief_job() -> None:
+            now = datetime.now(UTC)
+            symbols = sorted(set(rotation.universe) | {"SPY", "QQQ"})
+            closes_frames = {
+                s: cache.get_bars(s, "1d", now - timedelta(days=10), now) for s in symbols
+            }
+            prior_closes: dict[str, float] = {}
+            day_changes: dict[str, float] = {}
+            for s, f in closes_frames.items():
+                if len(f) >= 2:
+                    prior_closes[s] = float(f["close"].iloc[-1])
+                    day_changes[s] = float(f["close"].iloc[-1] / f["close"].iloc[-2] - 1)
+            premarket = {
+                s: p for s in ("SPY", "QQQ") if (p := latest_minute_price(s)) is not None
+            }
+            with factory() as session:
+                positions = [
+                    (r.strategy, r.symbol, float(r.qty))
+                    for r in session.scalars(
+                        select(BotPosition).where(BotPosition.qty != 0)
+                    ).all()
+                ]
+            brief = active_mode_a.morning_brief(
+                prior_closes=prior_closes,
+                day_changes=day_changes,
+                premarket=premarket,
+                uvxy_level=latest_minute_price("UVXY"),
+                positions=positions,
+            )
+            if brief is None:
+                alerter("critical", "morning brief failed — regime defaults neutral")
+            else:
+                alerter("info", f"brief: {brief.regime} — {brief.notes[:200]}")
+
+        def journal_job() -> None:
+            from plutus.models import FillRecord
+
+            now = datetime.now(UTC)
+            day_start = datetime(now.year, now.month, now.day, tzinfo=UTC)
+            with factory() as session:
+                fills = session.scalars(
+                    select(FillRecord).where(FillRecord.filled_at >= day_start)
+                ).all()
+                summary = "\n".join(
+                    f"{f.strategy} {f.side} {float(f.qty)} {f.symbol} @ {float(f.price)}"
+                    for f in fills
+                ) or "no fills today"
+            active_mode_a.journal(session_summary=f"Today's fills:\n{summary}")
+
+        scheduler.add_job(
+            brief_job,
+            CronTrigger(hour=8, minute=30, timezone="America/New_York"),
+            id="brief_0830",
+        )
+        scheduler.add_job(
+            journal_job,
+            CronTrigger(hour=16, minute=30, timezone="America/New_York"),
+            id="journal_1630",
+        )
 
     errored = {"flag": False}
     scheduler.add_listener(

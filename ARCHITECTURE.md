@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 5 (paper autotrading) built — 30-session acceptance clock running
+## Status: Phase 6 (AI Mode A) built — outage drill green; 30-session clock running
 
 ## System shape (target)
 
@@ -75,7 +75,16 @@ src/plutus/
                     ledger → crash alert → baseline → fills → reconcile →
                     mark-if-missed → scheduler), SIGTERM clean stop; jobs:
                     rotation 15:50, ORB per-minute 9–16h, fills every 20s,
-                    loss watch every 60s
+                    loss watch every 60s; with Mode A: brief 08:30 +
+                    journal 16:30, entry review before RiskManager
+  ai/
+    client.py       call_structured: forced tool call, pydantic-validated
+                    input, we own the retry (SDK max_retries=0, 20s budget),
+                    EVERY attempt audited to ai_audit (timeouts w/ null
+                    response); CostTable $/Mtok from config
+    mode_a.py       BriefResult/ReviewResult/JournalResult; honest prompts
+                    (UVXY proxy, IEX-only, no futures/VIX/news); clamp
+                    [0.5,1.5] in code; apply_review(None) = §9.4 0.5× path
 alembic/            Migrations; env.py resolves db_url from Settings,
                     tests override via `alembic -x db_url=...`
 tests/              fakes.py (FakeAdapter double) + config, migrations, order
@@ -239,6 +248,36 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in
   the same root and a wrong root there fails unsafe — make the runtime root
   explicit/configurable when building the RiskManager.
+
+## Phase 6 decisions
+
+- **Data substitution (§9 deviation):** the brief has no futures, no real
+  VIX, no news — it sees prior closes/changes from the cache, IEX pre-market
+  prints, and the UVXY level explicitly labeled as a volatility proxy. The
+  prompt states what is absent so the model cannot confabulate around a gap.
+- **Key-absent ≠ outage:** no ANTHROPIC_API_KEY → Mode A off, strategies at
+  1.0× (Phase 5 behavior, one info log). Key present but call fails/times
+  out → §9.4: entries proceed at 0.5× (floored) WITH a critical alert — a
+  silently degraded supervisor is unacceptable. Exits never touch the review
+  path (structural, not prompt-based).
+- **Review pipeline:** strategy sizing → review (buys only) → clamp
+  [0.5, 1.5] in code before arithmetic → RiskManager gates unchanged.
+  Vetoed intents persist as order rows (status=vetoed, rationale) so fills
+  analysis distinguishes vetoed from never-signaled.
+- **Regime staleness:** rotation uses TODAY's brief only (ET date); a stale
+  or missing brief means neutral at 1.0× — not the outage fallback.
+- **SDK discipline:** anthropic client at max_retries=0 (we own the single
+  §9 retry), 20s per-attempt budget; tool_choice forces a call, pydantic
+  validates it; every attempt audited (ai_audit) including timeouts.
+
+## Verification (Phase 6 acceptance — outage drill)
+
+- `uv run pytest` — 193 passed; ruff + mypy strict clean
+- Drill (test_mode_a_wiring): configured supervisor, transport times out on
+  every attempt → both hedge entries submit at exactly 0.5× floored
+  (62 → 31 shares), critical alert fired; veto recorded as order row;
+  hallucinated 3.0× multiplier clamps to 1.5; risk_off halves allocation;
+  Mode A absent → full size, zero alerts.
 
 ## Verification (Phase 5 build — acceptance clock runs in calendar time)
 

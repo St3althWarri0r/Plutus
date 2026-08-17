@@ -34,6 +34,7 @@ def test_upgrade_head_on_fresh_db(tmp_path: Path) -> None:
     assert "fills" in tables
     assert "manual_baseline" in tables
     assert "engine_sessions" in tables
+    assert "ai_audit" in tables
     assert "alembic_version" in tables
 
     inspector = inspect(create_engine(db_url))

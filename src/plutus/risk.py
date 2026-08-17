@@ -201,6 +201,29 @@ class RiskManager:
         )
         return report
 
+    def record_veto(self, intent: OrderIntent, rationale: str) -> None:
+        """Persist an AI-vetoed intent as an order row — 'fills match
+        expectations' analysis must distinguish vetoed from never-signaled."""
+        with self._session_factory() as session:
+            session.add(
+                Order(
+                    idempotency_key=intent.idempotency_key,
+                    symbol=intent.symbol,
+                    side=intent.side,
+                    qty=intent.qty,
+                    order_type=intent.order_type,
+                    limit_price=intent.limit_price,
+                    time_in_force=intent.time_in_force,
+                    strategy=intent.strategy,
+                    trading_mode=self._effective_mode,
+                    status="vetoed",
+                    reject_reason=f"AI veto: {rationale}",
+                    created_at=self._clock().astimezone(UTC),
+                )
+            )
+            session.commit()
+            log.info("order_vetoed", symbol=intent.symbol, rationale=rationale)
+
     # --- position book (fills only — acceptance never books a position) ------
 
     def record_fill(self, strategy: str, symbol: str, signed_qty: float) -> None:
