@@ -3,7 +3,41 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 6b (Mode B day trader) built — acceptance session runs Monday; 30-session clock running
+## Status: Phase 7 (aggregation dashboard) built — 30-session clock running
+
+## Phase 7 decisions
+
+- **CSV import is textarea PASTE, not file upload** — multipart would need
+  python-multipart, which Phase 1 deliberately excluded. Header maps per
+  institution (m1 | vanguard); a parse failure lists the headers actually
+  found, so the user's first real paste calibrates the maps.
+- **Paper never counts toward net worth (permanent):** Alpaca snapshots key
+  as `alpaca_paper` (→ `alpaca` in Phase 9); the card shows, the total and
+  chart exclude. Blending would poison the chart today and permanently once
+  live starts.
+- Snapshot dates are ET session dates; same-day refresh upserts; the nightly
+  snapshot job (16:20 ET) is DAILY, not session-gated — net worth exists on
+  weekends and crypto moves then. Net-worth math forward-fills each account
+  across the union of snapshot dates (sparse CSV uploads must not sawtooth).
+- **Plaid:** fully built behind mocks; Link is user-interactive (their
+  browser, their credentials — we store only the exchanged access token in
+  the gitignored DB via plaid_items). Production Investments access needs
+  Plaid approval — user starts that application in parallel; whether Plaid
+  connects M1 is unverifiable until Link runs. CSV is the guaranteed path.
+- Chart is a server-rendered inline SVG polyline — no chart lib.
+- Deferred (reviewable): transactions ingestion (§4 lists it; nothing
+  consumes it yet); Schwab card is honest-empty until Phase 8.
+
+## Operational incident (2026-08-17, ORB's first live trade)
+
+- The user-started engine (pre-6b code) caught ORB's first breakout: QQQ 6sh
+  @ 734.29 bracket entry, stop leg out @ 731.69 (−$15.60 — brackets worked).
+- Alpaca re-served the buy fill with 1μs filled_at jitter → the
+  timestamp-based dedupe key ingested it twice → phantom −35.25% daily halt
+  on orb. Fill keys are now stable fields (order:side:qty:price); records
+  corrected; orb left disabled with an annotated reason (user re-enables).
+- The engine now runs as a DETACHED process (logs/engine.log), not the
+  user's tmux. Stop: pkill -f "python -m plutus.engine".
 
 ## Phase 6b decisions
 

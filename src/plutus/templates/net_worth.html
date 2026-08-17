@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plutus — Net worth</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
+    .mode-banner { padding: 0.6rem; text-align: center; font-weight: 800; letter-spacing: 0.3em; }
+    .mode-paper { background: #14532d; color: #bbf7d0; }
+    main { padding: 2rem; max-width: 960px; margin: 0 auto; }
+    .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+    .card { background: #191d24; border: 1px solid #2a2e37; border-radius: 8px; padding: 1rem 1.5rem; min-width: 11rem; }
+    .card .label { color: #8b93a3; font-size: 0.8rem; text-transform: uppercase; }
+    .card .value { font-size: 1.4rem; font-weight: 700; margin-top: 0.25rem; }
+    .muted { color: #8b93a3; }
+    .notice { background: #14532d; color: #bbf7d0; padding: 0.6rem 1rem; border-radius: 8px; }
+    svg { background: #191d24; border: 1px solid #2a2e37; border-radius: 8px; }
+    textarea { width: 100%; min-height: 8rem; background: #0f1115; color: #e6e6e6; border: 1px solid #2a2e37; border-radius: 4px; }
+    select, button { background: #0f1115; color: #e6e6e6; border: 1px solid #2a2e37; border-radius: 4px; padding: 0.4rem 0.8rem; }
+    a { color: #bbf7d0; }
+  </style>
+</head>
+<body>
+  <div class="mode-banner mode-paper">NET WORTH</div>
+  <main>
+    <h1>Net worth: <strong>${{ "{:,.2f}".format(total_now) }}</strong>
+      <span class="muted">(paper accounts excluded)</span></h1>
+
+    <div class="cards">
+      {% for label, key, value in cards %}
+      <div class="card">
+        <div class="label">{{ label }}</div>
+        <div class="value">
+          {% if value is not none %}${{ "{:,.0f}".format(value) }}
+          {% elif key == "schwab" %}<span class="muted">arrives Phase 8</span>
+          {% else %}<span class="muted">no data yet</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <p>
+      Range:
+      <a href="/net-worth?range=1m">1M</a> ·
+      <a href="/net-worth?range=1y">1Y</a> ·
+      <a href="/net-worth?range=all">all</a>
+      <span class="muted">(showing {{ range }})</span>
+      <button hx-post="/refresh-snapshots" hx-target="#refresh-result" hx-swap="innerHTML"
+        style="margin-left: 1rem;">Refresh now</button>
+    </p>
+    <div id="refresh-result"></div>
+
+    {% if points %}
+    <svg viewBox="0 0 800 240" width="100%" height="240" role="img" aria-label="net worth chart">
+      <polyline fill="none" stroke="#4ade80" stroke-width="2" points="{{ points }}" />
+    </svg>
+    {% else %}
+    <p class="muted">Not enough snapshots to chart yet — import a CSV or hit Refresh.</p>
+    <svg viewBox="0 0 800 4" width="100%" height="4"><polyline points="0,2 800,2" stroke="#2a2e37"/></svg>
+    {% endif %}
+
+    <h2>Import holdings (CSV paste)</h2>
+    <p class="muted">Export the CSV from M1 or Vanguard, open it in a text editor,
+      and paste its contents here. If parsing fails, the error lists the columns it
+      found — send that back to extend the header maps.</p>
+    <form hx-post="/import-csv" hx-target="#import-result" hx-swap="innerHTML">
+      <label>Institution
+        <select name="institution">
+          <option value="m1">M1</option>
+          <option value="vanguard">Vanguard</option>
+        </select>
+      </label>
+      <textarea name="csv_text" placeholder="Symbol,Name,Quantity,..."></textarea>
+      <button type="submit">Import</button>
+    </form>
+    <div id="import-result"></div>
+
+    <p><a href="/">← dashboard</a> · <a href="/mode-b">Mode B stats</a></p>
+  </main>
+</body>
+</html>

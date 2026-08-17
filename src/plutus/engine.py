@@ -846,6 +846,27 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
         )
         log.info("mode_b_enabled", allocation=mb_allocation)
 
+    def nightly_snapshot_job() -> None:
+        # deliberately DAILY, not session-gated: net worth exists on weekends
+        # and the crypto positions move then
+        from plutus.aggregation import snapshot_alpaca
+        from plutus.plaid_sync import plaid_sync_from_settings
+
+        snapshot_alpaca(factory, adapter=adapter, mode=effective_trading_mode())
+        try:
+            plaid = plaid_sync_from_settings(settings, factory)
+            if plaid is not None:
+                for institution in ("m1", "vanguard"):
+                    plaid.sync_holdings(institution)
+        except Exception as exc:
+            log.warning("nightly_plaid_failed", error=str(exc))
+
+    scheduler.add_job(
+        nightly_snapshot_job,
+        CronTrigger(hour=16, minute=20, timezone="America/New_York"),
+        id="nightly_snapshots",
+    )
+
     errored = {"flag": False}
     scheduler.add_listener(
         make_error_listener(alert=alerter, errored=errored), EVENT_JOB_ERROR

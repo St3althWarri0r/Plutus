@@ -225,6 +225,90 @@ def create_app(
             f"{row.symbol} {row.side} {row.qty} — {row.status}{detail}</p>"
         )
 
+    @app.get("/net-worth", response_class=HTMLResponse)
+    def net_worth(request: Request, range: str = "1y") -> HTMLResponse:
+        from plutus.aggregation import net_worth_series
+
+        days = {"1m": 30, "1y": 365, "all": 36500}.get(range, 365)
+        series = net_worth_series(factory, days=days)
+        points = ""
+        if len(series.total) >= 2:
+            xs = [d.toordinal() for d, _ in series.total]
+            ys = [v for _, v in series.total]
+            x0, x1 = min(xs), max(xs)
+            y0, y1 = min(ys), max(ys)
+            xr = max(x1 - x0, 1)
+            yr = max(y1 - y0, 1e-9)
+            points = " ".join(
+                f"{(x - x0) / xr * 780 + 10:.1f},{230 - (y - y0) / yr * 210:.1f}"
+                for x, y in zip(xs, ys, strict=True)
+            )
+        total_now = series.total[-1][1] if series.total else 0.0
+        cards = [
+            ("M1", "m1"),
+            ("Vanguard", "vanguard"),
+            ("Schwab", "schwab"),
+            ("Alpaca (paper)", "alpaca_paper"),
+        ]
+        return templates.TemplateResponse(
+            request,
+            "net_worth.html",
+            {
+                "trading_mode": effective_trading_mode(),
+                "total_now": total_now,
+                "points": points,
+                "range": range,
+                "cards": [
+                    (label, key, series.latest_by_account.get(key)) for label, key in cards
+                ],
+            },
+        )
+
+    @app.post("/import-csv", response_class=HTMLResponse)
+    async def import_csv(request: Request) -> HTMLResponse:
+        from plutus.aggregation import CsvParseError, parse_holdings_csv, snapshot_account
+
+        body = (await request.body()).decode("utf-8", errors="replace")
+        form = {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
+        institution = form.get("institution", "")
+        try:
+            parsed = parse_holdings_csv(form.get("csv_text", ""), institution=institution)
+        except CsvParseError as exc:
+            return HTMLResponse(f"CSV import failed — {exc}", status_code=422)
+        snapshot_account(
+            factory,
+            account=institution,
+            equity=parsed.equity,
+            cash=parsed.cash,
+            positions=parsed.holdings,
+        )
+        return HTMLResponse(
+            f'<p class="notice">{institution} snapshot saved: '
+            f"${parsed.equity:,.2f} across {len(parsed.holdings)} holdings.</p>"
+        )
+
+    @app.post("/refresh-snapshots", response_class=HTMLResponse)
+    def refresh_snapshots() -> HTMLResponse:
+        from plutus.aggregation import snapshot_alpaca
+
+        written = []
+        if broker is not None:
+            snapshot_alpaca(factory, adapter=broker, mode=effective_trading_mode())
+            written.append("alpaca")
+        try:
+            from plutus.plaid_sync import plaid_sync_from_settings
+
+            plaid = plaid_sync_from_settings(get_settings(), factory)
+            if plaid is not None:
+                for institution in ("m1", "vanguard"):
+                    if plaid.sync_holdings(institution):
+                        written.append(institution)
+        except Exception as exc:
+            log.warning("plaid_refresh_failed", error=str(exc))
+        return HTMLResponse(
+            f'<p class="notice">Snapshots refreshed: {", ".join(written) or "none"}.</p>'
+        )
+
     @app.get("/mode-b", response_class=HTMLResponse)
     def mode_b_stats(request: Request) -> HTMLResponse:
         """§9B.7 promotion-bar stats, live. The lock stays until the user

@@ -1369,6 +1369,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nulltype"
+version = "2.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/ce/92289851364b7f816a839c8064aac06c01f3a3ecf33ab04adf9d0a0ab66a/nulltype-2.3.1.zip", hash = "sha256:64aa3cb2ab5e904d1b37175b9b922bea268c13f9ce32e3d373313150ab5ef272", size = 20119, upload-time = "2018-06-03T22:01:01.45Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/0f/47dde1a3cceac9858da0bfb92d2279bf5f993ed075b72983e92efc297db3/nulltype-2.3.1-py2.py3-none-any.whl", hash = "sha256:16ae565745118e37e0558441f5821c76351d8c3a789640b5bca277cf65b2271b", size = 11054, upload-time = "2018-06-03T22:01:04.03Z" },
+]
+
+[[package]]
 name = "numba"
 version = "0.67.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1639,6 +1648,17 @@ wheels = [
 ]
 
 [[package]]
+name = "plaid-python"
+version = "42.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nulltype" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/85/922b93f639930e56d28d56b06dbd8d4b838ccd1d2608e5844c03c8208310/plaid_python-42.0.0.tar.gz", hash = "sha256:dfe00c8a68d80d4f4110a3a03a9dc8b0470f8c63dace0650f779032deaccf749", size = 1245717, upload-time = "2026-07-24T19:49:23.474Z" }
+
+[[package]]
 name = "plotly"
 version = "6.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1673,6 +1693,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "pandas" },
+    { name = "plaid-python" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "sqlalchemy" },
@@ -1701,6 +1722,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "pandas", specifier = ">=3.0.5" },
+    { name = "plaid-python", specifier = ">=42.0.0" },
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlalchemy", specifier = ">=2.0" },

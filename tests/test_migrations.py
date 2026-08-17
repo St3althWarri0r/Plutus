@@ -38,6 +38,7 @@ def test_upgrade_head_on_fresh_db(tmp_path: Path) -> None:
     assert "day_plans" in tables
     assert "mode_b_state" in tables
     assert "mode_b_trades" in tables
+    assert "plaid_items" in tables
     assert "alembic_version" in tables
 
     inspector = inspect(create_engine(db_url))

@@ -243,6 +243,21 @@ class ModeBTrade(Base):
     realized_r: Mapped[float | None] = mapped_column(Numeric(10, 4), default=None)
 
 
+class PlaidItem(Base):
+    """One connected Plaid institution (M1, Vanguard). The access token is
+    runtime state living only in the gitignored DB — never in code or env."""
+
+    __tablename__ = "plaid_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    institution: Mapped[str] = mapped_column(String(32), unique=True)  # m1 | vanguard
+    item_id: Mapped[str] = mapped_column(String(64))
+    access_token: Mapped[str] = mapped_column(String(128))
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
 
