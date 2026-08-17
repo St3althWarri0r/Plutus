@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 4 (RiskManager + scheduler) complete — chaos suite green
+## Status: Phase 5 (paper autotrading) built — 30-session acceptance clock running
 
 ## System shape (target)
 
@@ -56,11 +56,26 @@ src/plutus/
                     regime, 50/50 UVXY+BSV hedge, no SOXL; BSV on RSI tie;
                     weights_history() only — no broker access
   risk.py           full §8 gate chain (see below) + fills/reconcile/daily-
-                    loss/kill; sole caller of submit_order, as always
+                    loss/kill + manual baseline; sole caller of submit_order
   market_calendar.py XNYS RTH + session-day checks; is_crypto (pair slash)
   scheduler.py      APScheduler jobs (ET): 09:15/16:15 reconcile, 09:30
-                    day-start mark, */5m daily-loss check, 15:55 intraday
-                    flatten; returned UNSTARTED — starting is a deploy choice
+                    day-start mark, */5m daily-loss check (guarded to
+                    09:30–16:00), 15:55 intraday flatten; returned UNSTARTED
+  alerts.py         TelegramAlerter — log-degrade without token, never raises
+  pnl.py            watermarked fill ingestion → fills table; equity_now =
+                    day-start + cash flow + MTM; 1.5% crossing warn monitor
+  execution.py      weights → floored whole-share orders, $50 dead-band,
+                    sells before buys; provisional-close append (the cache
+                    clamps daily bars to completed days — without the append
+                    the 15:50 signal would be yesterday's)
+  strategies/orb.py Strategy #2: opening-range breakout, bracket entries
+                    (stop = range low, target = entry + 2R), params from
+                    strategies.toml (tomllib, zero new deps)
+  engine.py         `python -m plutus.engine`: crash-safe startup (session
+                    ledger → crash alert → baseline → fills → reconcile →
+                    mark-if-missed → scheduler), SIGTERM clean stop; jobs:
+                    rotation 15:50, ORB per-minute 9–16h, fills every 20s,
+                    loss watch every 60s
 alembic/            Migrations; env.py resolves db_url from Settings,
                     tests override via `alembic -x db_url=...`
 tests/              fakes.py (FakeAdapter double) + config, migrations, order
@@ -181,15 +196,45 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   Monday collides with Strategy #2 (ORB on SPY): first bot SPY trade would
   mismatch and halt. Phase 5 needs a manual-baseline offset (likely marked
   at day start); until then, close manual test positions in bot symbols.
-- Phase 5 wiring notes: daily_loss_check cron fires 09:00–09:25 against the
-  previous day-start mark (harmless until equity_lookup is wired — guard it
-  then); consider alerting only on newly-appeared unknown positions to avoid
-  alert fatigue from the user's own holdings.
+- **Phase 5 resolutions:** daily_loss_check now guarded to 09:30–16:00 ET;
+  the manual baseline absorbs the user's own holdings (LINKUSD/BTC no longer
+  alert every reconcile, and the shared-symbol SPY collision is retired —
+  expected = bot book + baseline). Mid-day manual trades still mismatch
+  until the next mark: §8-correct, by design.
+- **Fill confirmation is polling (reviewable deviation from §3's websocket):**
+  the engine syncs/ingests fills every 20s. Broker-side brackets protect ORB
+  positions regardless of process health; Strategy #1 trades once a day.
+  Websocket revisits at Phase 6b if Mode B's latency budget requires it.
+- **Whole shares only, floored,** with a $50 rebalance dead-band against
+  daily 1-share churn. Brackets don't combine with fractional orders.
+- **Per-strategy position-cap overrides:** the §8 20% default contradicts a
+  100%-allocation rotation strategy by construction; RiskConfig carries
+  max_position_pct_overrides (tqqq_rotation → 100%). ORB entries on tight
+  stops can exceed the 20% notional cap and be rejected — the gate wins; a
+  cap-to-fit sizing negotiation is 6b's problem.
+- **Qty precision:** broker crypto quantities carry 9+ decimals; qty columns
+  widened to Numeric(24,10) and reconcile tolerance is scale-aware
+  (max(1e-6, 1e-8·qty)) — found by live smoke, pinned by regression test.
+- **Session ledger** (engine_sessions) is the §12/§13 acceptance clock:
+  ≥30 clean sessions. A crash can't alert itself; the next startup alerts on
+  any prior unclean row.
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in
   the same root and a wrong root there fails unsafe — make the runtime root
   explicit/configurable when building the RiskManager.
+
+## Verification (Phase 5 build — acceptance clock runs in calendar time)
+
+- `uv run pytest` — 172 passed; ruff + mypy strict clean
+- Live smoke (2026-08-16, real paper account): engine composition starts,
+  marks baseline (LINKUSD + BTCUSD at full precision), ingests 2 historical
+  fills, reconciles clean with the pending manual SPY order in-flight,
+  writes and cleanly closes an engine_sessions row. Scheduler job registry
+  verified. Telegram unconfigured → log degrade confirmed.
+- **Acceptance (≥30 clean sessions, zero unhandled errors, fills match
+  expectations) accrues from the first live session onward** — the build is
+  done; the clock is calendar time.
 
 ## Verification (Phase 4 acceptance — chaos suite)
 

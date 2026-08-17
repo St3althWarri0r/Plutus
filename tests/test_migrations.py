@@ -31,9 +31,16 @@ def test_upgrade_head_on_fresh_db(tmp_path: Path) -> None:
     assert "backtest_runs" in tables
     assert "strategy_state" in tables
     assert "bot_positions" in tables
+    assert "fills" in tables
+    assert "manual_baseline" in tables
+    assert "engine_sessions" in tables
     assert "alembic_version" in tables
 
     inspector = inspect(create_engine(db_url))
+    fill_uniques = {
+        tuple(uc["column_names"]) for uc in inspector.get_unique_constraints("fills")
+    }
+    assert ("broker_fill_key",) in fill_uniques  # idempotent re-ingestion
     order_uniques = {
         tuple(uc["column_names"]) for uc in inspector.get_unique_constraints("orders")
     }

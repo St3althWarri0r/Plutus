@@ -9,6 +9,7 @@ days via the exchange calendar.
 """
 
 from collections.abc import Callable
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -56,6 +57,10 @@ def build_scheduler(
             risk.flatten_strategy(strategy, reason="15:55 ET auto-flatten", disable=False)
 
     def daily_loss_check() -> None:
+        # before the 09:30 mark the reference is yesterday's — never compare
+        now_et = risk._clock().astimezone(ZoneInfo(ET))
+        if (now_et.hour, now_et.minute) < (9, 30) or now_et.hour >= 16:
+            return
         for strategy in strategies:
             equity = equity_lookup(strategy)
             if equity is not None:

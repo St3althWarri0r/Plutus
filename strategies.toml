@@ -1,0 +1,6 @@
+# Strategy #2 (opening-range breakout) parameters — config, not code (§6).
+[orb]
+symbols = ["SPY", "QQQ"]
+range_minutes = 15
+risk_usd = 100.0
+target_r = 2.0

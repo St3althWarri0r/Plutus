@@ -149,6 +149,41 @@ def test_orders_partial_polls_status_to_fill_confirmation() -> None:
         assert row.status == "filled"
 
 
+def test_strategy_panel_lists_state_and_enable_endpoint_reenables() -> None:
+    from plutus.models import StrategyState
+
+    adapter = FakeAdapter()
+    client, factory = make_client(adapter)
+    with factory() as session:
+        session.add(
+            StrategyState(
+                strategy="tqqq_rotation",
+                enabled=False,
+                halt_reason="daily loss halt (3.20%)",
+                allocation_usd=25_000,
+            )
+        )
+        session.commit()
+
+    page = client.get("/")
+    assert "tqqq_rotation" in page.text
+    assert "daily loss halt" in page.text
+
+    resp = client.post("/strategies/tqqq_rotation/enable", data={"confirm": "ENABLE"})
+    assert resp.status_code == 200
+    with factory() as session:
+        state = session.scalars(select(StrategyState)).one()
+        assert state.enabled and state.halt_reason is None
+
+    # confirmation text required — §8 halts need a deliberate manual re-enable
+    with factory() as session:
+        state = session.scalars(select(StrategyState)).one()
+        state.enabled = False
+        session.commit()
+    resp = client.post("/strategies/tqqq_rotation/enable", data={"confirm": "nope"})
+    assert resp.status_code == 400
+
+
 def test_missing_credentials_renders_notice_instead_of_crashing() -> None:
     client, _ = make_client(None)
 

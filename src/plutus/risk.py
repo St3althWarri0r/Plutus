@@ -48,6 +48,11 @@ class RiskConfig(BaseModel):
     """§8 hard gates — all configurable, spec defaults."""
 
     max_position_pct: float = Field(default=0.20, gt=0)
+    # full-allocation rotation strategies legitimately hold 100% in one symbol;
+    # the override keys by strategy name (§8 gates are configurable by design)
+    max_position_pct_overrides: dict[str, float] = Field(
+        default_factory=lambda: {"tqqq_rotation": 1.0}
+    )
     max_risk_per_trade_pct: float = Field(default=0.01, gt=0)
     max_concurrent_positions: int = Field(default=3, gt=0)
     daily_loss_halt_pct: float = Field(default=0.03, gt=0)
@@ -256,6 +261,37 @@ class RiskManager:
 
     # --- reconciliation (§8: DB is intent, broker is truth) -------------------
 
+    def mark_manual_baseline(self) -> None:
+        """Snapshot broker holdings the bot book doesn't own — the human's
+        positions. Called at engine start and before the 09:15 reconcile.
+        Baseline symbols stop generating unknown-position warnings; mid-day
+        manual trades still mismatch until the next mark (§8-correct)."""
+        from plutus.models import ManualBaseline
+
+        with self._session_factory() as session:
+            bot: dict[str, float] = {}
+            for r in session.scalars(select(BotPosition).where(BotPosition.qty != 0)).all():
+                key = _normalize_symbol(r.symbol)
+                bot[key] = bot.get(key, 0.0) + float(r.qty)
+
+            session.query(ManualBaseline).delete()
+            now = self._clock().astimezone(UTC)
+            for p in self._adapter.get_positions():
+                key = _normalize_symbol(p.symbol)
+                residual = p.qty - bot.get(key, 0.0)
+                if abs(residual) > 1e-9:
+                    session.add(ManualBaseline(symbol=key, qty=residual, marked_at=now))
+            session.commit()
+            log.info("manual_baseline_marked")
+
+    def _baseline(self, session: Session) -> dict[str, float]:
+        from plutus.models import ManualBaseline
+
+        return {
+            r.symbol: float(r.qty)
+            for r in session.scalars(select(ManualBaseline)).all()
+        }
+
     def reconcile(self) -> ReconcileReport:
         self.sync_fills()
         report = ReconcileReport()
@@ -276,6 +312,12 @@ class RiskManager:
                 expected[key] = expected.get(key, 0.0) + float(r.qty)
                 owners.setdefault(key, set()).add(r.strategy)
 
+            # the human's marked holdings shift expectations and are never unknown
+            baseline = self._baseline(session)
+            for key, qty in baseline.items():
+                expected[key] = expected.get(key, 0.0) + qty
+                owners.setdefault(key, set())
+
             broker = {
                 _normalize_symbol(p.symbol): p.qty for p in self._adapter.get_positions()
             }
@@ -285,7 +327,10 @@ class RiskManager:
                     report.in_flight.append(symbol)
                     continue
                 actual = broker.get(symbol, 0.0)
-                if abs(actual - exp_qty) > 1e-9:
+                # crypto quantities carry more precision than our Numeric
+                # columns; tolerate storage rounding, scaled to position size
+                tolerance = max(1e-6, 1e-8 * abs(exp_qty))
+                if abs(actual - exp_qty) > tolerance:
                     report.mismatches.append(
                         {"symbol": symbol, "expected": exp_qty, "broker": actual}
                     )
@@ -549,11 +594,14 @@ class RiskManager:
         pos = self._position_qty(session, intent.strategy, intent.symbol)
         signed = intent.qty if intent.side == "buy" else -intent.qty
         resulting_notional = abs(pos + signed) * price
-        cap = self.config.max_position_pct * allocation
+        max_pct = self.config.max_position_pct_overrides.get(
+            intent.strategy, self.config.max_position_pct
+        )
+        cap = max_pct * allocation
         if resulting_notional > cap:
             raise GateRejection(
                 f"position size {resulting_notional:.2f} exceeds "
-                f"{self.config.max_position_pct:.0%} of allocation ({cap:.2f})"
+                f"{max_pct:.0%} of allocation ({cap:.2f})"
             )
 
         # stop-based risk per trade

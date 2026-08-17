@@ -13,9 +13,15 @@ from typing import Any, cast
 
 import requests
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, QueryOrderStatus
+from alpaca.trading.enums import OrderClass, OrderSide, QueryOrderStatus
 from alpaca.trading.enums import TimeInForce as AlpacaTIF
-from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+    StopLossRequest,
+    TakeProfitRequest,
+)
 
 from plutus.brokers.base import (
     AccountState,
@@ -155,6 +161,12 @@ class AlpacaAdapter:
             "time_in_force": AlpacaTIF.DAY if order.time_in_force == "day" else AlpacaTIF.GTC,
             "client_order_id": order.idempotency_key,
         }
+        if order.stop_price is not None and order.take_profit_price is not None:
+            # broker-side bracket: if our process dies mid-position, the stop
+            # and target legs still protect it
+            common["order_class"] = OrderClass.BRACKET
+            common["stop_loss"] = StopLossRequest(stop_price=order.stop_price)
+            common["take_profit"] = TakeProfitRequest(limit_price=order.take_profit_price)
         if order.order_type == "limit":
             return LimitOrderRequest(limit_price=order.limit_price, **common)
         return MarketOrderRequest(**common)

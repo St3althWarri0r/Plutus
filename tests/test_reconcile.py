@@ -150,6 +150,84 @@ def test_reconcile_normalizes_crypto_pair_symbols(tmp_path: Path) -> None:
     assert report.mismatches == []
 
 
+# --- manual baseline ----------------------------------------------------------
+
+
+def test_baseline_absorbs_human_holdings_no_more_warnings(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.broker_holds("LINKUSD", 20_788.02)
+    h.broker_holds("BTCUSD", 0.001)
+
+    h.rm.mark_manual_baseline()
+    report = h.rm.reconcile()
+
+    assert report.mismatches == []
+    assert report.unknown == []
+    assert h.alerts == []  # the fatigue fix: known human holdings stay silent
+
+
+def test_baseline_is_broker_minus_bot_book(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.rm.record_fill("s1", "SPY", 5)
+    h.broker_holds("SPY", 7)  # 5 bot + 2 human
+
+    h.rm.mark_manual_baseline()
+    assert h.rm.reconcile().mismatches == []
+
+    # bot buys 1 more (filled): broker 8, bot 6, baseline 2 → still clean
+    h.rm.record_fill("s1", "SPY", 1)
+    h.adapter.positions[0].qty = 8
+    assert h.rm.reconcile().mismatches == []
+
+    # broker loses a share the bot thinks it owns → mismatch
+    h.adapter.positions[0].qty = 7
+    assert h.rm.reconcile().mismatches != []
+
+
+def test_monday_spy_trace_pending_then_fill_stays_clean(tmp_path: Path) -> None:
+    """The Phase 4 flagged collision: manual SPY order pending over the
+    weekend, baseline marked at engine start, order fills Monday."""
+    h = Harness(tmp_path)
+    h.broker_holds("LINKUSD", 100.0)
+    row = h.rm.submit(
+        OrderIntent(symbol="SPY", side="buy", qty=1, order_type="market", strategy="manual")
+    )
+    assert row.broker_order_id is not None
+
+    h.rm.mark_manual_baseline()  # engine start: SPY pending, not yet held
+    first = h.rm.reconcile()
+    assert first.mismatches == [] and "SPY" in first.in_flight
+
+    # Monday: the order fills; broker now holds it
+    h.adapter.status_by_broker_id[row.broker_order_id] = OrderStatus.FILLED
+    h.broker_holds("SPY", 1)
+    second = h.rm.reconcile()  # sync_fills books it under 'manual' in bot book
+    assert second.mismatches == []
+    assert not any(sev == "critical" for sev, _ in h.alerts)
+
+
+def test_crypto_precision_survives_baseline_round_trip(tmp_path: Path) -> None:
+    """Regression (found by live smoke): broker reports LINKUSD to 9+ decimal
+    places; column rounding must not manufacture a reconcile mismatch."""
+    h = Harness(tmp_path)
+    h.broker_holds("LINKUSD", 20_788.024399992)
+    h.rm.mark_manual_baseline()
+
+    report = h.rm.reconcile()
+
+    assert report.mismatches == []
+    assert not any(sev == "critical" for sev, _ in h.alerts)
+
+
+def test_new_unknown_position_after_baseline_still_alerts(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.rm.mark_manual_baseline()
+    h.broker_holds("GME", 42.0)  # appeared after the mark
+    report = h.rm.reconcile()
+    assert "GME" in report.unknown
+    assert any(sev == "warning" for sev, _ in h.alerts)
+
+
 # --- daily-loss halt ----------------------------------------------------------
 
 

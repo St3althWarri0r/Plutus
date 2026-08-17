@@ -41,7 +41,7 @@ class Order(Base):
     broker_order_id: Mapped[str | None] = mapped_column(String(64), default=None)
     symbol: Mapped[str] = mapped_column(String(16))
     side: Mapped[str] = mapped_column(String(4))
-    qty: Mapped[float] = mapped_column(Numeric(18, 6))
+    qty: Mapped[float] = mapped_column(Numeric(24, 10))
     order_type: Mapped[str] = mapped_column(String(8))
     limit_price: Mapped[float | None] = mapped_column(Numeric(18, 4), default=None)
     time_in_force: Mapped[str] = mapped_column(String(8), default="day")
@@ -122,10 +122,57 @@ class BotPosition(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     strategy: Mapped[str] = mapped_column(String(64))
     symbol: Mapped[str] = mapped_column(String(16))
-    qty: Mapped[float] = mapped_column(Numeric(18, 6))
+    qty: Mapped[float] = mapped_column(Numeric(24, 10))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class FillRecord(Base):
+    """P&L record of confirmed fills (additive to status-based booking).
+
+    broker_fill_key dedupes re-ingestion: broker_order_id + filled_at is
+    unique per fill event on Alpaca's closed-order feed.
+    """
+
+    __tablename__ = "fills"
+    __table_args__ = (UniqueConstraint("broker_fill_key", name="uq_fill_broker_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    broker_fill_key: Mapped[str] = mapped_column(String(128))
+    broker_order_id: Mapped[str] = mapped_column(String(64))
+    strategy: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(16))
+    side: Mapped[str] = mapped_column(String(4))
+    qty: Mapped[float] = mapped_column(Numeric(24, 10))
+    price: Mapped[float] = mapped_column(Numeric(18, 4))
+    filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ManualBaseline(Base):
+    """Broker holdings not owned by the bot book, marked at engine start and
+    pre-reconcile — the human's positions, subtracted before mismatch checks."""
+
+    __tablename__ = "manual_baseline"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), unique=True)
+    qty: Mapped[float] = mapped_column(Numeric(24, 10))
+    marked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EngineSession(Base):
+    """Session ledger for the §12/§13 acceptance clock (≥30 clean sessions)."""
+
+    __tablename__ = "engine_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_date: Mapped[date] = mapped_column(Date)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    clean: Mapped[bool] = mapped_column(default=False)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class BacktestRun(Base):

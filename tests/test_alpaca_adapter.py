@@ -146,6 +146,29 @@ def test_submit_limit_order_carries_limit_price() -> None:
     assert req.limit_price == 400.5
 
 
+def test_bracket_order_maps_stop_and_take_profit_legs() -> None:
+    from alpaca.trading.enums import OrderClass
+
+    client = FakeTradingClient()
+    adapter = AlpacaAdapter(client)
+    intent = OrderIntent(
+        symbol="SPY",
+        side="buy",
+        qty=40,
+        order_type="market",
+        stop_price=99.8,
+        take_profit_price=107.8,
+        strategy="orb",
+    )
+
+    adapter.submit_order(intent)
+
+    (req,) = client.submitted
+    assert req.order_class == OrderClass.BRACKET
+    assert req.stop_loss.stop_price == 99.8
+    assert req.take_profit.limit_price == 107.8
+
+
 # --- chaos: API timeout mid-order (CLAUDE.md rule 7) --------------------------
 
 

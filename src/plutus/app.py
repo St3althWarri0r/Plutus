@@ -23,7 +23,7 @@ from plutus.brokers.base import BrokerAdapter, OrderIntent, OrderStatus
 from plutus.config import effective_trading_mode, get_settings
 from plutus.db import make_engine, make_session_factory
 from plutus.logging_setup import configure_logging, get_logger
-from plutus.models import Order
+from plutus.models import Order, StrategyState
 from plutus.risk import RiskManager
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -139,6 +139,9 @@ def create_app(
         positions = broker.get_positions() if broker is not None else []
         with factory() as session:
             orders = refresh_open_orders(session)
+            strategies = list(
+                session.scalars(select(StrategyState).order_by(StrategyState.strategy)).all()
+            )
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -149,8 +152,31 @@ def create_app(
                 "account": account,
                 "positions": positions,
                 "orders": orders,
+                "strategies": strategies,
             },
         )
+
+    @app.post("/strategies/{name}/enable", response_class=HTMLResponse)
+    async def enable_strategy(name: str, request: Request) -> HTMLResponse:
+        body = (await request.body()).decode("utf-8", errors="replace")
+        form = {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
+        # §8 halts end only by deliberate manual re-enable
+        if form.get("confirm") != "ENABLE":
+            return HTMLResponse(
+                "Type ENABLE in the confirmation box to re-enable this strategy",
+                status_code=400,
+            )
+        with factory() as session:
+            state = session.scalars(
+                select(StrategyState).where(StrategyState.strategy == name)
+            ).one_or_none()
+            if state is None:
+                return HTMLResponse(f"unknown strategy {name!r}", status_code=404)
+            state.enabled = True
+            state.halt_reason = None
+            session.commit()
+        log.info("strategy_reenabled", strategy=name)
+        return HTMLResponse(f'<p class="notice">{name} re-enabled.</p>')
 
     @app.get("/partials/orders", response_class=HTMLResponse)
     def orders_partial(request: Request) -> HTMLResponse:

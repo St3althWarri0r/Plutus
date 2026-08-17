@@ -43,9 +43,10 @@ class OrderIntent(BaseModel):
     qty: float = Field(gt=0)
     order_type: OrderType
     limit_price: float | None = Field(default=None, gt=0)
-    # sizing-only in Phase 4 (RiskManager risk-per-trade gate); becomes a real
-    # broker-side stop leg with bracket orders in Phase 6b
+    # feeds the risk-per-trade gate; with take_profit_price it also becomes a
+    # real broker-side bracket leg (entry + stop-loss + take-profit)
     stop_price: float | None = Field(default=None, gt=0)
+    take_profit_price: float | None = Field(default=None, gt=0)
     time_in_force: TimeInForce = "day"
     strategy: str = "manual"
     idempotency_key: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -64,6 +65,8 @@ class OrderIntent(BaseModel):
             raise ValueError("limit orders require limit_price")
         if self.order_type == "market" and self.limit_price is not None:
             raise ValueError("market orders must not carry limit_price")
+        if self.take_profit_price is not None and self.stop_price is None:
+            raise ValueError("take_profit_price requires stop_price (bracket)")
         return self
 
 

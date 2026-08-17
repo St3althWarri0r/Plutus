@@ -22,6 +22,7 @@ class FakeAdapter:
         self.status_by_broker_id: dict[str, OrderStatus] = {}
         self.positions: list[Position] = []
         self.canceled: list[str] = []
+        self.fills: list[Fill] = []
 
     def get_account(self) -> AccountState:
         return AccountState(equity=1000.0, cash=1000.0, buying_power=2000.0)
@@ -51,4 +52,4 @@ class FakeAdapter:
         return self.status_by_broker_id.get(broker_order_id, OrderStatus.ACCEPTED)
 
     def get_fills(self, since: datetime) -> list[Fill]:
-        return []
+        return [f for f in self.fills if f.filled_at >= since]

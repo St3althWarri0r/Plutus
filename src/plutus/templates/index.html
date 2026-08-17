@@ -115,6 +115,41 @@
     </section>
 
     <section>
+      <h2>Strategies</h2>
+      {% if strategies %}
+      <table>
+        <thead>
+          <tr><th>Strategy</th><th>Status</th><th>Allocation</th><th>Halt reason</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for s in strategies %}
+          <tr>
+            <td>{{ s.strategy }}</td>
+            <td class="{{ 'status-filled' if s.enabled else 'status-rejected' }}">
+              {{ "enabled" if s.enabled else "DISABLED" }}
+            </td>
+            <td>${{ "%.0f"|format(s.allocation_usd) }}</td>
+            <td>{{ s.halt_reason or "" }}</td>
+            <td>
+              {% if not s.enabled %}
+              <form hx-post="/strategies/{{ s.strategy }}/enable" hx-target="#strategy-result"
+                    hx-swap="innerHTML" style="display:flex;gap:0.4rem;">
+                <input name="confirm" placeholder="ENABLE" autocomplete="off" size="8">
+                <button type="submit">Re-enable</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div id="strategy-result"></div>
+      {% else %}
+      <p class="muted">No strategy state yet — the engine creates it on first run.</p>
+      {% endif %}
+    </section>
+
+    <section>
       <h2>Kill switch</h2>
       <form hx-post="/kill" hx-target="#kill-result" hx-swap="innerHTML"
             onsubmit="return this.confirm.value === 'KILL' || (alert('Type KILL to confirm'), false)">
