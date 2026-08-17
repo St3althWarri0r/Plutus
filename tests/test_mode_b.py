@@ -259,6 +259,23 @@ def test_discipline_block_means_no_order(tmp_path: Path) -> None:
     assert env.adapter.submitted == []
 
 
+def test_short_entries_rejected_long_only_v1(tmp_path: Path) -> None:
+    """All five playbook setups are long patterns; short plumbing is
+    half-built (unsigned qty), so v1 gates shorts out with an alert."""
+    env = Env(tmp_path, [])
+    decision = ModeBDecision.model_validate(enter_decision(side="sell"))
+    env.executor.execute(
+        decision,
+        counters=SessionCounters(),
+        open_positions=[],
+        session_pnl_r=0.0,
+        planned_symbols={"NVDA"},
+        current_prices={"NVDA": 100.0},
+    )
+    assert env.adapter.submitted == []
+    assert any("long-only" in msg.lower() for _, msg in env.alerts)
+
+
 # --- forced mechanics ---------------------------------------------------------
 
 

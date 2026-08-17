@@ -723,7 +723,9 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                     planned_symbols=_planned_symbols(),
                     current_prices=prices,
                 )
-            mode_b.save_state(*mode_b.load_state())
+            # persist the MUTATED counters (executor increments off_plan_used)
+            # — reloading here would silently discard the off-plan budget
+            mode_b.save_state(mode_b.load_state()[0], counters)
 
         def mode_b_position_job() -> None:
             """Every 15s: deterministic mechanics first (§9B.4 — no AI in the
@@ -755,7 +757,7 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                             )
                             counters.breakeven_done.append(position.symbol)
                     elif action.kind == "scale_out" and action.qty >= 1:
-                        risk.submit(
+                        row = risk.submit(
                             OrderIntent(
                                 symbol=position.symbol,
                                 side="sell" if position.qty > 0 else "buy",
@@ -764,7 +766,18 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                                 strategy="mode_b",
                             )
                         )
-                        counters.scale_out_done.append(position.symbol)
+                        if row.status == "rejected":
+                            # the MANDATORY +2R scale-out failed — likely the
+                            # bracket legs reserve the shares; needs the
+                            # reduce-legs-then-sell sequence (Monday probe)
+                            alerter(
+                                "critical",
+                                f"mandatory scale-out REJECTED for "
+                                f"{position.symbol}: {row.reject_reason} — "
+                                "will retry next tick",
+                            )
+                        else:
+                            counters.scale_out_done.append(position.symbol)
             now = datetime.now(UTC)
             sync_mode_b_trades(
                 factory, discipline=discipline, counters=counters, now=now

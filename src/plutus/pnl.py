@@ -56,7 +56,15 @@ def ingest_fills(
             order = session.scalars(
                 select(Order).where(Order.broker_order_id == fill.broker_order_id)
             ).one_or_none()
-            strategy = order.strategy if order is not None else "manual"
+            book_reduction = False
+            if order is not None:
+                strategy = order.strategy
+            else:
+                # broker-created bracket LEGS were never in our orders table:
+                # attribute to the strategy holding the reducing position and
+                # shrink its book here (sync_fills only books tracked orders)
+                strategy = _attribute_unknown_fill(session, fill)
+                book_reduction = strategy != "manual"
             session.add(
                 FillRecord(
                     broker_fill_key=key,
@@ -74,9 +82,54 @@ def ingest_fills(
                 new_rows += 1
             except IntegrityError:
                 session.rollback()  # already ingested (overlap window)
+                continue
+            if book_reduction:
+                signed = fill.qty if fill.side == "buy" else -fill.qty
+                _book_fill(session, strategy, fill.symbol, signed)
+                session.commit()
+                log.info(
+                    "leg_fill_booked",
+                    strategy=strategy,
+                    symbol=fill.symbol,
+                    signed_qty=signed,
+                )
     if new_rows:
         log.info("fills_ingested", count=new_rows)
     return new_rows
+
+
+def _attribute_unknown_fill(session: Session, fill: object) -> str:
+    """A fill for an order we never submitted: a bracket leg if exactly one
+    bot strategy holds an opposing position in the symbol; else manual."""
+    symbol = fill.symbol  # type: ignore[attr-defined]
+    side = fill.side  # type: ignore[attr-defined]
+    normalized = symbol.replace("/", "")
+    candidates = [
+        row
+        for row in session.scalars(
+            select(BotPosition).where(BotPosition.qty != 0)
+        ).all()
+        if row.symbol.replace("/", "") == normalized
+        and (
+            (side == "sell" and float(row.qty) > 0)
+            or (side == "buy" and float(row.qty) < 0)
+        )
+    ]
+    if len(candidates) == 1:
+        return candidates[0].strategy
+    return "manual"
+
+
+def _book_fill(session: Session, strategy: str, symbol: str, signed_qty: float) -> None:
+    row = session.scalars(
+        select(BotPosition).where(
+            BotPosition.strategy == strategy, BotPosition.symbol == symbol
+        )
+    ).one_or_none()
+    if row is None:
+        session.add(BotPosition(strategy=strategy, symbol=symbol, qty=signed_qty))
+    else:
+        row.qty = float(row.qty) + signed_qty
 
 
 def equity_now(

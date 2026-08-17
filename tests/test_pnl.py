@@ -95,6 +95,58 @@ def test_ingest_attributes_strategy_from_orders_table(tmp_path: Path) -> None:
         assert strategies == {"s1", "manual"}
 
 
+def test_bracket_leg_fill_attributes_to_holder_and_reduces_book(tmp_path: Path) -> None:
+    """Broker-created bracket LEGS were never in our orders table. Their fills
+    must attribute to the strategy holding the reducing position and shrink
+    its book — otherwise the first target hit leaves a stale book, a false
+    reconcile halt, and a 15:55 flatten that would short the account."""
+    from plutus.models import BotPosition
+
+    rm, adapter, factory = make_env(tmp_path)
+    row = rm.submit(
+        OrderIntent(
+            symbol="SPY",
+            side="buy",
+            qty=15,
+            order_type="market",
+            stop_price=109.0,
+            take_profit_price=112.0,
+            strategy="mode_b",
+        )
+    )
+    assert row.broker_order_id is not None
+    # parent fill: tracked order → attributed via orders table; book updated
+    # through the sync path
+    adapter.fills = [fill(row.broker_order_id, "SPY", "buy", 15, 100.0, T0)]
+    ingest_fills(adapter, factory, clock=lambda: T0 + timedelta(hours=1))
+    rm.record_fill("mode_b", "SPY", 15)
+
+    # the target LEG fills — an order id we never submitted
+    adapter.fills.append(
+        fill("leg-uuid-1", "SPY", "sell", 15, 112.0, T0 + timedelta(minutes=30))
+    )
+    ingest_fills(adapter, factory, clock=lambda: T0 + timedelta(hours=1))
+
+    with factory() as session:
+        leg = session.scalars(
+            select(FillRecord).where(FillRecord.broker_order_id == "leg-uuid-1")
+        ).one()
+        assert leg.strategy == "mode_b"  # not "manual"
+        book = session.scalars(
+            select(BotPosition).where(BotPosition.strategy == "mode_b")
+        ).one()
+        assert float(book.qty) == 0.0  # book reduced to flat
+
+
+def test_unmatched_unknown_fill_still_attributes_manual(tmp_path: Path) -> None:
+    rm, adapter, factory = make_env(tmp_path)
+    adapter.fills = [fill("mystery-1", "GME", "buy", 1, 20.0, T0)]
+    ingest_fills(adapter, factory, clock=lambda: T0 + timedelta(hours=1))
+    with factory() as session:
+        rec = session.scalars(select(FillRecord)).one()
+        assert rec.strategy == "manual"
+
+
 def test_equity_now_cash_flow_plus_mark_to_market(tmp_path: Path) -> None:
     rm, adapter, factory = make_env(tmp_path)
     rm.mark_day_start("s1", equity=10_000.0)

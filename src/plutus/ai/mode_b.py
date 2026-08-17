@@ -295,6 +295,13 @@ class ModeBExecutor:
         symbol = decision.symbol
         if symbol is None:
             return
+        if decision.side == "sell":
+            # v1 is long-only: all five playbook setups are long patterns and
+            # short accounting (signed qty) is not plumbed — reject loudly
+            self._alert(
+                "warning", f"Mode B is long-only in v1 — short entry on {symbol} rejected"
+            )
+            return
         if decision.stop_price is None:
             self._alert(
                 "warning", f"Mode B enter without stop_price for {symbol} — rejected"

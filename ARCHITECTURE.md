@@ -36,9 +36,20 @@ spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
   account has NO API credits (400 at billing) — every AI call currently
   no-ops through the §9 outage paths. Model-ID validity (claude-sonnet-4-6)
   unverified until credits exist; re-run the probe then.
+- **Bracket-leg accounting (advisor-caught, acceptance-critical):** bracket
+  legs are broker-created orders that were never in our orders table; their
+  fills now attribute to the strategy holding the opposing position and
+  reduce its book at ingest — without this, the first target hit left a
+  stale book, a false reconcile halt, and a 15:55 flatten that would have
+  SHORTED the account. Applies to ORB too (latent since Phase 5).
+- **Mode B is long-only in v1** (all five setups are long patterns; short
+  accounting is unsigned) — short entries reject with an alert. A rejected
+  mandatory scale-out critical-alerts and retries next tick (bracket legs
+  may reserve the shares — the reduce-legs-then-sell question is answered by
+  Monday's live session).
 - Deferred with notes: weekly self-review proposals, halt/resume events (no
   free source), RVOL/premarket levels in the packet (fields exist, wiring
-  v2), screener-fed candidates.
+  v2), screener-fed candidates, signed-qty short support.
 
 ## System shape (target)
 
