@@ -50,9 +50,10 @@ def build_scheduler(
                 risk.mark_day_start(strategy, equity=equity)
 
     def flatten_intraday() -> None:
+        # routine end-of-day flatten: closes positions but NEVER touches
+        # enable state — a daily-loss halt from earlier today must survive
         for strategy in sorted(risk.config.intraday_strategies):
-            risk.flatten_strategy(strategy, reason="15:55 ET auto-flatten")
-            risk.enable_strategy(strategy)  # auto-flatten is routine, not a halt
+            risk.flatten_strategy(strategy, reason="15:55 ET auto-flatten", disable=False)
 
     def daily_loss_check() -> None:
         for strategy in strategies:

@@ -171,6 +171,20 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   flatten every bot position, disable every strategy; un-kill is manual file
   removal. Alerting is a pluggable callable (log-backed until Telegram in
   Phase 5). stop_price on OrderIntent is sizing-only until 6b brackets.
+- The routine 15:55 auto-flatten runs with disable=False and never touches
+  enable state — a daily-loss halt from earlier in the day survives it
+  (pinned by chaos test). Partial fill followed by cancel/expiry halts the
+  owning strategy with a critical alert (rule 6: never guess).
+- **Known limitation for Phase 5 (shared-symbol reconcile):** reconcile
+  compares bot-expected qty against TOTAL broker qty per symbol — one
+  account, so manual holdings add in. The 1-share manual SPY order filling
+  Monday collides with Strategy #2 (ORB on SPY): first bot SPY trade would
+  mismatch and halt. Phase 5 needs a manual-baseline offset (likely marked
+  at day start); until then, close manual test positions in bot symbols.
+- Phase 5 wiring notes: daily_loss_check cron fires 09:00–09:25 against the
+  previous day-start mark (harmless until equity_lookup is wired — guard it
+  then); consider alerting only on newly-appeared unknown positions to avoid
+  alert fatigue from the user's own holdings.
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in

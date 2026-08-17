@@ -232,7 +232,26 @@ class RiskManager:
                     session.commit()
                     self.record_fill(row.strategy, row.symbol, signed)
                 elif str(status) != row.status and status != OrderStatus.UNKNOWN:
+                    prior = row.status
                     row.status = str(status)
+                    # rule 6: partial fill then cancel/expiry leaves shares the
+                    # bot book doesn't know about — halt + alert, never guess
+                    if (
+                        status in (OrderStatus.CANCELED, OrderStatus.EXPIRED)
+                        and prior == "partially_filled"
+                    ):
+                        self._disable(
+                            session,
+                            row.strategy,
+                            f"partial fill then {status} on {row.symbol} — "
+                            "manual reconcile required",
+                        )
+                        self._alert(
+                            "critical",
+                            f"partial fill then {status}: {row.strategy}/{row.symbol} "
+                            f"order {row.broker_order_id} — strategy halted, "
+                            "reconcile manually",
+                        )
                     session.commit()
 
     # --- reconciliation (§8: DB is intent, broker is truth) -------------------
@@ -325,15 +344,18 @@ class RiskManager:
             )
             self.flatten_strategy(strategy, reason=f"daily loss halt ({loss:.2%})")
 
-    def flatten_strategy(self, strategy: str, reason: str) -> None:
-        """Close every bot position for the strategy; disable until manual re-enable.
+    def flatten_strategy(self, strategy: str, reason: str, *, disable: bool = True) -> None:
+        """Close every bot position for the strategy.
 
-        Exit orders carry full exit privileges — no entry gates, no rate limit.
-        A broker failure mid-flatten alerts and leaves the strategy disabled;
-        it never raises.
+        disable=True (halts, kill) leaves the strategy off until manual
+        re-enable; disable=False is for the routine 15:55 auto-flatten, which
+        must never touch enable state — a daily-loss halt earlier in the day
+        stays a halt. Exit orders carry full exit privileges — no entry gates,
+        no rate limit. A broker failure mid-flatten alerts and never raises.
         """
         with self._session_factory() as session:
-            self._disable(session, strategy, reason)
+            if disable:
+                self._disable(session, strategy, reason)
             session.commit()
             rows = session.scalars(
                 select(BotPosition).where(

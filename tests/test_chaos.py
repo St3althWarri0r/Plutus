@@ -87,6 +87,58 @@ def test_inflight_order_resolves_to_clean_reconcile(tmp_path: Path) -> None:
     assert second.mismatches == [] and second.in_flight == []
 
 
+def test_1555_flatten_never_reenables_a_halted_strategy(tmp_path: Path) -> None:
+    """§8: daily-loss halt is 'until manual re-enable' — the routine 15:55
+    auto-flatten must not clear it."""
+    from sqlalchemy import select
+
+    from plutus.models import StrategyState
+
+    rm, adapter = make_rm(tmp_path, Clock(RTH))
+    rm.config.intraday_strategies.add("orb")
+    rm.record_fill("orb", "SPY", 3)
+    rm.mark_day_start("orb", equity=10_000.0)
+    rm.check_daily_loss("orb", current_equity=9_000.0)  # −10% → halted
+
+    sched = build_scheduler(rm, equity_lookup=lambda s: 9_000.0, strategies=["orb"])
+    sched.get_job("flatten_intraday").func()
+
+    with rm._session_factory() as session:
+        state = session.scalars(
+            select(StrategyState).where(StrategyState.strategy == "orb")
+        ).one()
+        assert not state.enabled
+        assert "daily loss" in (state.halt_reason or "")
+
+
+def test_partial_fill_then_cancel_halts_and_alerts(tmp_path: Path) -> None:
+    """Rule 6: partial fill → halt + alert + reconcile, never guess. A cancel
+    after a partial fill leaves shares the bot book doesn't know about."""
+    from sqlalchemy import select
+
+    from plutus.models import StrategyState
+
+    alerts: list[tuple[str, str]] = []
+    rm, adapter = make_rm(tmp_path, Clock(RTH))
+    rm._alert = lambda sev, msg: alerts.append((sev, msg))
+    row = rm.submit(
+        OrderIntent(symbol="SPY", side="buy", qty=10, order_type="market", strategy="s1")
+    )
+    assert row.broker_order_id is not None
+
+    adapter.status_by_broker_id[row.broker_order_id] = OrderStatus.PARTIALLY_FILLED
+    rm.sync_fills()
+    adapter.status_by_broker_id[row.broker_order_id] = OrderStatus.CANCELED
+    rm.sync_fills()
+
+    assert any(sev == "critical" and "partial" in msg.lower() for sev, msg in alerts)
+    with rm._session_factory() as session:
+        state = session.scalars(
+            select(StrategyState).where(StrategyState.strategy == "s1")
+        ).one()
+        assert not state.enabled
+
+
 def test_scheduler_jobs_skip_non_session_days(tmp_path: Path) -> None:
     clock = Clock(datetime(2024, 7, 4, 9, 15, tzinfo=ET))  # holiday
     rm, adapter = make_rm(tmp_path, clock)
