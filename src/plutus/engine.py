@@ -867,6 +867,22 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
         id="nightly_snapshots",
     )
 
+    if settings.schwab_token_path:
+        from pathlib import Path as _Path
+
+        from plutus.brokers.schwab import TokenHealth, check_token_health
+
+        schwab_health = TokenHealth(_Path(settings.schwab_token_path))
+
+        def schwab_token_job() -> None:
+            check_token_health(schwab_health, alerter)
+
+        scheduler.add_job(
+            _gate(schwab_token_job, clock=lambda: datetime.now(UTC)),
+            CronTrigger(hour=8, minute=0, timezone="America/New_York"),
+            id="schwab_token_health",
+        )
+
     errored = {"flag": False}
     scheduler.add_listener(
         make_error_listener(alert=alerter, errored=errored), EVENT_JOB_ERROR

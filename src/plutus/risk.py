@@ -534,7 +534,7 @@ class RiskManager:
         self, session: Session, intent: OrderIntent, *, exit_privileged: bool
     ) -> None:
         self._gate_kill(exit_privileged=exit_privileged)
-        self._gate_mode()
+        self._gate_mode(intent)
         self._gate_strategy_enabled(session, intent, exit_privileged=exit_privileged)
 
         is_exit = exit_privileged or self._is_exit(session, intent)
@@ -555,9 +555,27 @@ class RiskManager:
         if (self._runtime_root / "KILL").exists() and not exit_privileged:
             raise GateRejection("KILL switch present — all trading halted")
 
-    def _gate_mode(self) -> None:
-        if self._effective_mode != "paper":
-            raise GateRejection("live trading is not enabled before Phase 9")
+    def _gate_mode(self, intent: OrderIntent | None = None) -> None:
+        if self._effective_mode == "paper":
+            return
+        # Phase 8's ONLY live path: the manually-triggered Schwab round-trip
+        # (§12), and only when BOTH platform switches are physically present —
+        # TRADING_MODE=live in the environment AND a live.lock the USER
+        # created (§13 reserves live.lock creation to the user; code never
+        # touches it). Everything else stays shut until Phase 9.
+        if (
+            intent is not None
+            and intent.strategy == "manual_schwab_test"
+            and self._settings.trading_mode == "live"
+            and (self._runtime_root / "live.lock").is_file()
+        ):
+            self._alert(
+                "critical",
+                f"LIVE Schwab test order passing the mode gate: "
+                f"{intent.side} {intent.qty} {intent.symbol}",
+            )
+            return
+        raise GateRejection("live trading is not enabled before Phase 9")
 
     def _gate_strategy_enabled(
         self, session: Session, intent: OrderIntent, *, exit_privileged: bool

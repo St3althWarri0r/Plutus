@@ -3,7 +3,31 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 7 (aggregation dashboard) built — 30-session clock running
+## Status: Phase 8 (Schwab adapter) built — awaiting dev-app approval for the live round-trip; 30-session clock running
+
+## Phase 8 decisions
+
+- **schwab-py 1.5.1 probed at the library level** (client signatures, order
+  builders, Location-header order ids); response-shape mapping is
+  probe-calibrated ONLY at that level — the manual live round-trip is the
+  first real-data validation (same honesty as Plaid).
+- **Token clock is ours:** the OAuth helper records refresh-token birth in a
+  sidecar file (schwab-py's token format is undocumented — we don't parse
+  it). 6 days → warning alert (24h early per §3); ≥7 days or unknown age →
+  every adapter call raises SchwabAuthStale. Never trade on stale auth; the
+  7-day re-auth is a recurring manual chore (§3's known Schwab limitation).
+- **The live carve-out is a keyhole, not a door:** _gate_mode passes live
+  orders ONLY for strategy manual_schwab_test AND only when the user has
+  personally set TRADING_MODE=live and created live.lock (code never touches
+  live.lock — §13). Pinned by test: Alpaca strategies still reject live even
+  with both switches armed. The round-trip script is the documented §12
+  exception to rule 5's no-test-scripts rule — it exists to exercise the
+  RiskManager path, not bypass it.
+- **Idempotency honesty:** schwab-py has no client-supplied order id, so
+  SchwabAdapter cannot guarantee Alpaca-style timeout dedupe; ambiguous
+  failures resolve by recent-order lookup (weaker, documented in the
+  adapter). No replace_stop (Mode B is Alpaca-paper territory).
+- Daily 08:00 ET token-health job in the engine when SCHWAB_TOKEN_PATH set.
 
 ## Phase 7 decisions
 
