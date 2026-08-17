@@ -51,7 +51,11 @@ def ingest_fills(
 
     new_rows = 0
     for fill in adapter.get_fills(since):
-        key = f"{fill.broker_order_id}:{_aware(fill.filled_at).isoformat()}"
+        # STABLE FIELDS ONLY (live incident 2026-08-17: Alpaca re-served the
+        # same fill with 1μs filled_at jitter; a timestamp key double-counted
+        # it and fired a phantom −35% daily halt). Alpaca's closed-order feed
+        # aggregates one fill per order, so order+side+qty+price is unique.
+        key = f"{fill.broker_order_id}:{fill.side}:{fill.qty}:{fill.price}"
         with session_factory() as session:
             order = session.scalars(
                 select(Order).where(Order.broker_order_id == fill.broker_order_id)

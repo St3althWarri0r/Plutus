@@ -95,6 +95,25 @@ def test_ingest_attributes_strategy_from_orders_table(tmp_path: Path) -> None:
         assert strategies == {"s1", "manual"}
 
 
+def test_fill_dedupe_survives_timestamp_jitter(tmp_path: Path) -> None:
+    """Live incident 2026-08-17: Alpaca returned the same fill with a 1μs
+    filled_at difference across polls; a timestamp-based key ingested it
+    twice, double-counting cash flow and firing a phantom −35% daily halt.
+    The key must be built from stable fields only."""
+    rm, adapter, factory = make_env(tmp_path)
+    adapter.fills = [fill("b9", "QQQ", "buy", 6, 734.29, T0)]
+    ingest_fills(adapter, factory, clock=lambda: T0 + timedelta(hours=1))
+
+    # same fill re-observed with jittered microseconds
+    adapter.fills = [fill("b9", "QQQ", "buy", 6, 734.29, T0 + timedelta(microseconds=1))]
+    n = ingest_fills(adapter, factory, clock=lambda: T0 + timedelta(hours=1))
+
+    assert n == 0
+    with factory() as session:
+        rows = session.scalars(select(FillRecord)).all()
+        assert len(rows) == 1
+
+
 def test_bracket_leg_fill_attributes_to_holder_and_reduces_book(tmp_path: Path) -> None:
     """Broker-created bracket LEGS were never in our orders table. Their fills
     must attribute to the strategy holding the reducing position and shrink
