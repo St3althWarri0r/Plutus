@@ -35,3 +35,16 @@ def test_live_lock_must_be_a_file_not_a_directory(tmp_path: Path) -> None:
     (tmp_path / "live.lock").mkdir()
     settings = make_settings(trading_mode="live")
     assert effective_trading_mode(settings, repo_root=tmp_path) == "paper"
+
+
+def test_runtime_root_defaults_to_repo_root() -> None:
+    from plutus.config import REPO_ROOT, resolve_runtime_root
+
+    assert resolve_runtime_root(make_settings()) == REPO_ROOT
+
+
+def test_runtime_root_overridable_via_settings(tmp_path: Path) -> None:
+    from plutus.config import resolve_runtime_root
+
+    settings = make_settings(runtime_root=str(tmp_path))
+    assert resolve_runtime_root(settings) == tmp_path

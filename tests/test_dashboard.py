@@ -4,6 +4,8 @@ The app factory accepts injected adapter/session_factory so these tests run
 against the FakeAdapter — never live credentials (CLAUDE.md rule 7).
 """
 
+from datetime import UTC, datetime
+
 from fakes import FakeAdapter
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -12,8 +14,10 @@ from sqlalchemy.pool import StaticPool
 
 from plutus.app import create_app
 from plutus.brokers.base import OrderStatus, Position
+from plutus.config import Settings
 from plutus.db import Base, make_session_factory
 from plutus.models import Order
+from plutus.risk import RiskManager
 
 
 def make_client(adapter: FakeAdapter | None) -> tuple[TestClient, sessionmaker[Session]]:
@@ -24,7 +28,16 @@ def make_client(adapter: FakeAdapter | None) -> tuple[TestClient, sessionmaker[S
     )
     Base.metadata.create_all(engine)
     factory = make_session_factory(engine)
-    app = create_app(adapter=adapter, session_factory=factory)
+    risk = None
+    if adapter is not None:
+        risk = RiskManager(
+            adapter=adapter,
+            session_factory=factory,
+            settings=Settings(_env_file=None),  # type: ignore[call-arg]
+            clock=lambda: datetime(2024, 6, 5, 18, 0, tzinfo=UTC),  # Wed 14:00 ET
+            price_lookup=lambda _s: 100.0,
+        )
+    app = create_app(adapter=adapter, session_factory=factory, risk_manager=risk)
     return TestClient(app), factory
 
 

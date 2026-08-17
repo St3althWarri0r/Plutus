@@ -4,6 +4,8 @@ Full §8 gates arrive in Phase 4; what is pinned here is the routing contract:
 nothing reaches BrokerAdapter.submit_order except through RiskManager.submit.
 """
 
+from datetime import UTC, datetime
+
 from fakes import FakeAdapter
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -14,6 +16,8 @@ from plutus.db import Base, make_session_factory
 from plutus.models import Order
 from plutus.risk import RiskManager
 
+RTH_CLOCK = datetime(2024, 6, 5, 18, 0, tzinfo=UTC)  # Wednesday 14:00 ET
+
 
 def make_rm() -> tuple[RiskManager, FakeAdapter, sessionmaker[Session]]:
     engine = create_engine("sqlite:///:memory:")
@@ -21,7 +25,13 @@ def make_rm() -> tuple[RiskManager, FakeAdapter, sessionmaker[Session]]:
     factory = make_session_factory(engine)
     adapter = FakeAdapter()
     settings = Settings(trading_mode="paper", _env_file=None)  # type: ignore[call-arg]
-    rm = RiskManager(adapter=adapter, session_factory=factory, settings=settings)
+    rm = RiskManager(
+        adapter=adapter,
+        session_factory=factory,
+        settings=settings,
+        clock=lambda: RTH_CLOCK,
+        price_lookup=lambda _s: 100.0,
+    )
     return rm, adapter, factory
 
 

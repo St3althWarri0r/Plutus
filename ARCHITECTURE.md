@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 3 (Strategy #1 port + validation) complete — awaiting user metrics review
+## Status: Phase 4 (RiskManager + scheduler) complete — chaos suite green
 
 ## System shape (target)
 
@@ -55,6 +55,12 @@ src/plutus/
     tqqq_rotation.py §6 tree, ported exactly: strict >79/<31, TQQQ-based
                     regime, 50/50 UVXY+BSV hedge, no SOXL; BSV on RSI tie;
                     weights_history() only — no broker access
+  risk.py           full §8 gate chain (see below) + fills/reconcile/daily-
+                    loss/kill; sole caller of submit_order, as always
+  market_calendar.py XNYS RTH + session-day checks; is_crypto (pair slash)
+  scheduler.py      APScheduler jobs (ET): 09:15/16:15 reconcile, 09:30
+                    day-start mark, */5m daily-loss check, 15:55 intraday
+                    flatten; returned UNSTARTED — starting is a deploy choice
 alembic/            Migrations; env.py resolves db_url from Settings,
                     tests override via `alembic -x db_url=...`
 tests/              fakes.py (FakeAdapter double) + config, migrations, order
@@ -140,11 +146,48 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   1.21→0.84. Flagged for user review rather than silently chosen.
 - Backtest runs 1–3 in backtest_runs are the Phase 3 fixed-tree records
   (same_close / next_close / next_open, 2 bps, Wilder).
+- **Phase 3 review resolutions (user, 2026-08-16):** shorter data window
+  (2020-07→present) accepted; RSI stays Wilder's.
+- **§8 gate chain (Phase 4):** kill → mode (paper-only until Phase 9) →
+  dedupe → strategy-enabled → stale-data → market-hours → rate-limits →
+  priced gates (position size, stop-based risk, leveraged cap, concurrent).
+  Exits bypass entry gates AND the rate limiter (a flatten must never
+  throttle); a flip past flat counts as an entry; crypto pairs are exempt
+  from market-hours (24/7). Unpriceable entries fail closed. **Behavior
+  change:** manual equity entries outside RTH are now rejected (the Phase 1
+  Sunday SPY order would no longer be accepted); crypto is unaffected.
+- **Positions book on FILLS, never on acceptance** (bot_positions). Reconcile
+  is scoped to bot-owned symbols: mismatch → halt owners + critical alert;
+  unknown broker positions (the human's own holdings) → warning only;
+  in-flight orders are resolved first, never halted on. Symbols normalize
+  slash-less for broker comparison (BTC/USD ↔ BTCUSD).
+- **Dollar allocations, not account fractions:** strategy risk budgets are
+  absolute USD (strategy_state.allocation_usd, default RiskConfig value) —
+  the $42M account equity is dominated by non-bot holdings. Daily-loss halt
+  measures against the 09:30 day-start mark; equity per strategy comes from
+  an injectable lookup (real P&L accounting arrives with the Phase 5 engine).
+- **Kill switch:** KILL file (checked in runtime_root, fail-closed on a bad
+  root) or POST /kill with typed double-confirm → cancel all open orders,
+  flatten every bot position, disable every strategy; un-kill is manual file
+  removal. Alerting is a pluggable callable (log-backed until Telegram in
+  Phase 5). stop_price on OrderIntent is sizing-only until 6b brackets.
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in
   the same root and a wrong root there fails unsafe — make the runtime root
   explicit/configurable when building the RiskManager.
+
+## Verification (Phase 4 acceptance — chaos suite)
+
+- `uv run pytest` — 142 passed; ruff + mypy strict clean
+- Chaos drills green: kill drill (file + endpoint; cancel-failure alerts and
+  continues; wrong runtime root fails closed), reconcile mismatch → halt +
+  critical alert, unknown broker position → warning without halt, in-flight
+  order → no false halt then clean after fill, daily-loss breach → flatten +
+  disable with a 1/min rate limit proven inert, duplicate fill sync books
+  once, rate-limit bursts, RTH rejection with crypto carve-out, stale-data
+  entry block, flatten failure mid-halt → alert + disabled without crash,
+  scheduler jobs skip holidays.
 
 ## Verification (Phase 2 acceptance)
 

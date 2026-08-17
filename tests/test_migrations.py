@@ -29,6 +29,8 @@ def test_upgrade_head_on_fresh_db(tmp_path: Path) -> None:
     assert "bars" in tables
     assert "bar_coverage" in tables
     assert "backtest_runs" in tables
+    assert "strategy_state" in tables
+    assert "bot_positions" in tables
     assert "alembic_version" in tables
 
     inspector = inspect(create_engine(db_url))

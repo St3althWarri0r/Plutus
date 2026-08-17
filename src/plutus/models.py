@@ -86,6 +86,48 @@ class BarCoverage(Base):
     end_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class StrategyState(Base):
+    """Per-strategy enable/halt state and the daily-loss reference mark.
+
+    allocation_usd is the strategy's risk budget in dollars — NOT a fraction
+    of account equity, which is dominated by non-bot holdings. day_start_
+    equity_usd is stamped by the 09:30 scheduler job and survives restarts.
+    """
+
+    __tablename__ = "strategy_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(64), unique=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    halt_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    allocation_usd: Mapped[float] = mapped_column(Numeric(18, 2), default=0)
+    day_start_equity_usd: Mapped[float | None] = mapped_column(Numeric(18, 2), default=None)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BotPosition(Base):
+    """Positions the bot believes it holds (source of intent; broker is truth).
+
+    Updated on confirmed fills only — never on order acceptance — and
+    corrected by reconciliation.
+    """
+
+    __tablename__ = "bot_positions"
+    __table_args__ = (
+        UniqueConstraint("strategy", "symbol", name="uq_bot_position_strategy_symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(16))
+    qty: Mapped[float] = mapped_column(Numeric(18, 6))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
 

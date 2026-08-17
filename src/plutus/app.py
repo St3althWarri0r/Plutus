@@ -6,6 +6,7 @@ manual paper order form, and an order list that polls broker status until
 fill confirmation. Tests inject a fake adapter and an in-memory DB.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -37,9 +38,49 @@ def _default_adapter() -> BrokerAdapter | None:
         return None
 
 
+def _default_price_lookup(
+    factory: sessionmaker[Session],
+) -> Callable[[str], float | None]:
+    """Stocks: last cached daily close. Crypto pairs: latest quote midpoint."""
+    from datetime import UTC, datetime, timedelta
+
+    from plutus.data.alpaca_data import alpaca_data_provider_from_settings
+    from plutus.data.cache import CachedDataProvider
+    from plutus.market_calendar import is_crypto
+
+    try:
+        cache: CachedDataProvider | None = CachedDataProvider(
+            alpaca_data_provider_from_settings(get_settings()), factory
+        )
+    except MissingCredentialsError:
+        cache = None
+
+    def lookup(symbol: str) -> float | None:
+        try:
+            if is_crypto(symbol):
+                from alpaca.data.historical import CryptoHistoricalDataClient
+                from alpaca.data.requests import CryptoLatestQuoteRequest
+
+                quotes = CryptoHistoricalDataClient().get_crypto_latest_quote(
+                    CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
+                )
+                quote = quotes[symbol]
+                return (float(quote.ask_price) + float(quote.bid_price)) / 2
+            if cache is None:
+                return None
+            now = datetime.now(UTC)
+            bars = cache.get_bars(symbol, "1d", now - timedelta(days=10), now)
+            return float(bars["close"].iloc[-1]) if len(bars) else None
+        except Exception:
+            return None  # unpriceable → the risk gate fails closed
+
+    return lookup
+
+
 def create_app(
     adapter: BrokerAdapter | None | object = _UNSET,
     session_factory: sessionmaker[Session] | None = None,
+    risk_manager: RiskManager | None = None,
 ) -> FastAPI:
     configure_logging()
     log = get_logger("plutus.app")
@@ -49,7 +90,16 @@ def create_app(
     else:
         broker = adapter  # type: ignore[assignment]
     factory = session_factory or make_session_factory(make_engine())
-    risk = None if broker is None else RiskManager(adapter=broker, session_factory=factory)
+    if risk_manager is not None:
+        risk: RiskManager | None = risk_manager
+    elif broker is not None:
+        risk = RiskManager(
+            adapter=broker,
+            session_factory=factory,
+            price_lookup=_default_price_lookup(factory),
+        )
+    else:
+        risk = None
 
     app = FastAPI(title="Plutus", version=__version__)
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -147,6 +197,26 @@ def create_app(
         return HTMLResponse(
             f'<p class="order-ack status-{row.status}">'
             f"{row.symbol} {row.side} {row.qty} — {row.status}{detail}</p>"
+        )
+
+    @app.post("/kill", response_class=HTMLResponse)
+    async def kill(request: Request) -> HTMLResponse:
+        if risk is None:
+            return HTMLResponse("Broker not configured — nothing to kill", status_code=503)
+        body = (await request.body()).decode("utf-8", errors="replace")
+        form = {k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()}
+        # double-confirm: the literal text KILL must be typed
+        if form.get("confirm") != "KILL":
+            return HTMLResponse(
+                'Type KILL in the confirmation box to engage the kill switch',
+                status_code=400,
+            )
+        report = risk.kill(source="dashboard")
+        return HTMLResponse(
+            f'<p class="notice">KILL engaged — canceled {report.canceled} orders, '
+            f"flattened {len(report.flattened)} positions, "
+            f"disabled {len(report.disabled)} strategies. "
+            "Remove the KILL file manually to resume.</p>"
         )
 
     return app

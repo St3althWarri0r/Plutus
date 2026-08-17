@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     trading_mode: TradingMode = "paper"
     db_url: str = "sqlite:///plutus.db"
+    # where KILL and live.lock live; explicit because a wrong root must fail
+    # closed for the kill check (Phase 0 flagged this debt for Phase 4)
+    runtime_root: str | None = None
 
     alpaca_api_key: str | None = None
     alpaca_secret_key: str | None = None
@@ -49,6 +52,11 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def resolve_runtime_root(settings: Settings | None = None) -> Path:
+    settings = settings or get_settings()
+    return Path(settings.runtime_root) if settings.runtime_root else REPO_ROOT
 
 
 def effective_trading_mode(

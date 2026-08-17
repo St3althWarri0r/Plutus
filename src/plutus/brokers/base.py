@@ -43,6 +43,9 @@ class OrderIntent(BaseModel):
     qty: float = Field(gt=0)
     order_type: OrderType
     limit_price: float | None = Field(default=None, gt=0)
+    # sizing-only in Phase 4 (RiskManager risk-per-trade gate); becomes a real
+    # broker-side stop leg with bracket orders in Phase 6b
+    stop_price: float | None = Field(default=None, gt=0)
     time_in_force: TimeInForce = "day"
     strategy: str = "manual"
     idempotency_key: str = Field(default_factory=lambda: str(uuid.uuid4()))

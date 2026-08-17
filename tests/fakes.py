@@ -18,8 +18,10 @@ class FakeAdapter:
     def __init__(self) -> None:
         self.submitted: list[OrderIntent] = []
         self.fail_with: Exception | None = None
+        self.cancel_fail_with: Exception | None = None
         self.status_by_broker_id: dict[str, OrderStatus] = {}
         self.positions: list[Position] = []
+        self.canceled: list[str] = []
 
     def get_account(self) -> AccountState:
         return AccountState(equity=1000.0, cash=1000.0, buying_power=2000.0)
@@ -40,7 +42,10 @@ class FakeAdapter:
         )
 
     def cancel_order(self, broker_order_id: str) -> None:
-        pass
+        if self.cancel_fail_with is not None:
+            raise self.cancel_fail_with
+        self.canceled.append(broker_order_id)
+        self.status_by_broker_id[broker_order_id] = OrderStatus.CANCELED
 
     def get_order_status(self, broker_order_id: str) -> OrderStatus:
         return self.status_by_broker_id.get(broker_order_id, OrderStatus.ACCEPTED)

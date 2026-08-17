@@ -113,6 +113,19 @@
     <section>
       {% include "_orders.html" %}
     </section>
+
+    <section>
+      <h2>Kill switch</h2>
+      <form hx-post="/kill" hx-target="#kill-result" hx-swap="innerHTML"
+            onsubmit="return this.confirm.value === 'KILL' || (alert('Type KILL to confirm'), false)">
+        <label class="muted">Type KILL to cancel all orders, flatten all bot positions,
+          and disable all strategies:
+          <input name="confirm" placeholder="KILL" autocomplete="off">
+        </label>
+        <button type="submit" style="background:#7f1d1d;color:#fecaca;border:0;border-radius:4px;padding:0.5rem 1.2rem;font-weight:700;cursor:pointer;">KILL</button>
+      </form>
+      <div id="kill-result"></div>
+    </section>
   </main>
 </body>
 </html>
