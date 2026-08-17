@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 2 (data + backtester) complete — acceptance verified
+## Status: Phase 3 (Strategy #1 port + validation) complete — awaiting user metrics review
 
 ## System shape (target)
 
@@ -47,6 +47,14 @@ src/plutus/
                     same_close | next_open | next_close; costs on fill day
     metrics.py      CAGR/Sharpe/Sortino/maxDD/exposure/turnover/trades/yearly
     persist.py      save_run/load_run → backtest_runs
+    walkforward.py  rolling IS fit over a param grid, stitched OOS returns,
+                    OOS-only metrics; one full-series backtest per param
+  strategies/
+    indicators.py   sma, rsi_wilder (default; SMA-seeded recursion),
+                    rsi_cutler (kept to quantify definition divergence)
+    tqqq_rotation.py §6 tree, ported exactly: strict >79/<31, TQQQ-based
+                    regime, 50/50 UVXY+BSV hedge, no SOXL; BSV on RSI tie;
+                    weights_history() only — no broker access
 alembic/            Migrations; env.py resolves db_url from Settings,
                     tests override via `alembic -x db_url=...`
 tests/              fakes.py (FakeAdapter double) + config, migrations, order
@@ -118,6 +126,20 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   per symbol with gross-of-cost P&L.
 - Dependencies added: `vectorbt`, `pandas` promoted to direct (§2-approved);
   `pandas-stubs` dev-only for mypy strict.
+- **Data reality (Phase 3, blocking item for user review):** Alpaca IEX daily
+  history for this account starts 2020-07-27 (~6y rolling window, apparently a
+  free-tier limit). With the 200-bar warmup the effective backtest range is
+  2021-05-14 → present — the spec's "≥2015" and the §7 "must include 2020"
+  promotion requirement are unreachable on this feed. Options (user decision):
+  accept the shorter window, pay for SIP/deeper data, or approve a new data
+  dependency (rule 4). Also: IEX auction closes ≠ consolidated closes — signal
+  noise vs Composer-era numbers.
+- **RSI definition is a live question:** the tree came from a platform whose
+  RSI definition can't be verified. Wilder's is our default; under Cutler's
+  the allocation differs on 13.7% of days and next_close Sharpe moves
+  1.21→0.84. Flagged for user review rather than silently chosen.
+- Backtest runs 1–3 in backtest_runs are the Phase 3 fixed-tree records
+  (same_close / next_close / next_open, 2 bps, Wilder).
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in
