@@ -79,6 +79,26 @@ def test_flatten_intraday_job_flattens_only_intraday_strategies(tmp_path: Path) 
     assert symbols == {"SPY"}
 
 
+def test_session_gated_skips_non_session_days(tmp_path: Path) -> None:
+    """main()'s own crons (rotation/brief/journal) must not fire on weekends:
+    a Saturday 15:50 rotation would critical-alert 'unpriceable' forever."""
+    from plutus.scheduler import session_gated
+
+    calls: list[str] = []
+    saturday = datetime(2024, 6, 8, 15, 50, tzinfo=ET)
+    wednesday = datetime(2024, 6, 5, 15, 50, tzinfo=ET)
+
+    now = {"t": saturday}
+    gated = session_gated(lambda: calls.append("ran"), clock=lambda: now["t"])
+
+    gated()
+    assert calls == []  # Saturday: skipped
+
+    now["t"] = wednesday
+    gated()
+    assert calls == ["ran"]
+
+
 def test_daily_loss_job_checks_each_strategy(tmp_path: Path) -> None:
     rm, adapter = make_rm(tmp_path)
     rm.record_fill("s1", "SPY", 3)

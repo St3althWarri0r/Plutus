@@ -419,8 +419,11 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 
+    from plutus.scheduler import session_gated as _gate
+
     scheduler.add_job(
-        rotation_job, CronTrigger(hour=15, minute=50, timezone="America/New_York"),
+        _gate(rotation_job, clock=lambda: datetime.now(UTC)),
+        CronTrigger(hour=15, minute=50, timezone="America/New_York"),
         id="rotation_1550",
     )
     scheduler.add_job(
@@ -477,19 +480,35 @@ def main() -> None:  # pragma: no cover - composition root, exercised by smoke
                 fills = session.scalars(
                     select(FillRecord).where(FillRecord.filled_at >= day_start)
                 ).all()
-                summary = "\n".join(
+                fills_text = "\n".join(
                     f"{f.strategy} {f.side} {float(f.qty)} {f.symbol} @ {float(f.price)}"
                     for f in fills
                 ) or "no fills today"
-            active_mode_a.journal(session_summary=f"Today's fills:\n{summary}")
+                # §9: P&L ATTRIBUTION needs per-strategy numbers, not raw fills
+                pnl_lines = []
+                for st in session.scalars(select(StrategyState)).all():
+                    if st.day_start_equity_usd is None:
+                        continue
+                    equity = strategy_equity(st.strategy)
+                    if equity is not None:
+                        delta = equity - float(st.day_start_equity_usd)
+                        pnl_lines.append(f"{st.strategy}: {delta:+.2f} USD on the day")
+            pnl_text = "\n".join(pnl_lines) or "no day-start marks"
+            active_mode_a.journal(
+                session_summary=(
+                    f"Per-strategy day P&L:\n{pnl_text}\n\nToday's fills:\n{fills_text}"
+                )
+            )
+
+        from plutus.scheduler import session_gated
 
         scheduler.add_job(
-            brief_job,
+            session_gated(brief_job, clock=lambda: datetime.now(UTC)),
             CronTrigger(hour=8, minute=30, timezone="America/New_York"),
             id="brief_0830",
         )
         scheduler.add_job(
-            journal_job,
+            session_gated(journal_job, clock=lambda: datetime.now(UTC)),
             CronTrigger(hour=16, minute=30, timezone="America/New_York"),
             id="journal_1630",
         )

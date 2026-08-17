@@ -112,6 +112,7 @@ class AiClient:
 
         started = time.perf_counter()
         response: Any = None
+        raw_payload: dict[str, Any] | None = None
         error: str | None = None
         decision: S | None = None
         try:
@@ -123,8 +124,8 @@ class AiClient:
                 tools=[tool],
                 tool_choice={"type": "tool", "name": "decide"},
             )
-            payload = self._extract_tool_input(response)
-            decision = schema.model_validate(payload)
+            raw_payload = self._extract_tool_input(response)
+            decision = schema.model_validate(raw_payload)
         except ValidationError as exc:
             error = f"schema validation failed: {exc.errors()[:3]}"
         except Exception as exc:
@@ -147,9 +148,11 @@ class AiClient:
                     model=self.model,
                     prompt_hash=prompt_hash,
                     prompt_text=prompt_text,
+                    # verbatim (§9): the malformed payload is stored too —
+                    # it's the row you need when debugging a bad review
                     response_text=(
-                        json.dumps(self._extract_tool_input(response), default=str)
-                        if response is not None and error is None
+                        json.dumps(raw_payload, default=str)
+                        if raw_payload is not None
                         else None
                     ),
                     input_tokens=input_tokens,

@@ -102,6 +102,9 @@ def test_malformed_then_valid_retries_once(tmp_path: Path) -> None:
     rows = audit_rows(factory)
     assert len(rows) == 2  # both attempts audited
     assert rows[0].error is not None and rows[1].error is None
+    # §9: responses logged VERBATIM — the malformed payload is exactly the
+    # row you need when debugging a bad review
+    assert rows[0].response_text is not None and "wrong" in rows[0].response_text
 
 
 def test_malformed_twice_returns_none(tmp_path: Path) -> None:

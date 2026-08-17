@@ -9,6 +9,7 @@ days via the exchange calendar.
 """
 
 from collections.abc import Callable
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -21,6 +22,28 @@ from plutus.risk import RiskManager
 log = get_logger("plutus.scheduler")
 
 ET = "America/New_York"
+
+
+def session_gated(
+    fn: Callable[[], None],
+    *,
+    clock: Callable[[], "datetime"],
+    calendar: MarketCalendar | None = None,
+) -> Callable[[], None]:
+    """Wrap a job so it only runs on NYSE session days — for the engine's own
+    crons (rotation/brief/journal). Weekend firings would false-alarm
+    (Saturday 15:50 'unpriceable' criticals) and spend AI dollars on nothing.
+    Deliberately NOT used for fills_sync (crypto fills 24/7) or loss_watch
+    (self-quiets when unpriceable)."""
+    cal = calendar or MarketCalendar()
+
+    def wrapped() -> None:
+        if not cal.is_session_day(clock()):
+            log.info("job_skipped_non_session")
+            return
+        fn()
+
+    return wrapped
 
 
 def build_scheduler(
