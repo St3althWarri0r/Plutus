@@ -3,7 +3,9 @@
 Phase 0 seeded the snapshots table (one row per account per day — powers the
 net-worth-over-time chart). Phase 1 adds orders: one row per OrderIntent that
 reaches the RiskManager, keyed by the client-generated idempotency key so a
-retry after a timeout can never double-submit.
+retry after a timeout can never double-submit. Phase 2 adds the bar cache
+(bars + bar_coverage, so backtests never re-fetch) and backtest_runs (persisted
+reports, comparable over time).
 """
 
 from datetime import date, datetime
@@ -51,3 +53,45 @@ class Order(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class Bar(Base):
+    __tablename__ = "bars"
+    __table_args__ = (
+        UniqueConstraint("symbol", "interval", "ts", name="uq_bar_symbol_interval_ts"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16))
+    interval: Mapped[str] = mapped_column(String(8))  # '1d', '1m'
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # UTC, normalized by cache
+    open: Mapped[float] = mapped_column(Numeric(18, 6))
+    high: Mapped[float] = mapped_column(Numeric(18, 6))
+    low: Mapped[float] = mapped_column(Numeric(18, 6))
+    close: Mapped[float] = mapped_column(Numeric(18, 6))
+    volume: Mapped[float] = mapped_column(Numeric(20, 2))
+    # a later split invalidates cached history for that symbol (flush + re-fetch)
+    adjustment: Mapped[str] = mapped_column(String(8), default="all")
+
+
+class BarCoverage(Base):
+    """Contiguous [start, end] ranges already fetched per (symbol, interval)."""
+
+    __tablename__ = "bar_coverage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16))
+    interval: Mapped[str] = mapped_column(String(8))
+    start_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class BacktestRun(Base):
+    __tablename__ = "backtest_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(64))
+    config_json: Mapped[str] = mapped_column(Text)  # universe, dates, fill, costs, params
+    metrics_json: Mapped[str] = mapped_column(Text)
+    equity_curve_json: Mapped[str] = mapped_column(Text)  # [[iso_date, equity], ...]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

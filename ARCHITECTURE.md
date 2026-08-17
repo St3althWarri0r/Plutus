@@ -3,7 +3,7 @@
 Single-user, self-hosted portfolio dashboard + automated trading engine. Full
 spec lives in [CLAUDE.md](CLAUDE.md); this file tracks what is actually built.
 
-## Status: Phase 1 (Alpaca read + paper orders) complete — acceptance verified
+## Status: Phase 2 (data + backtester) complete — acceptance verified
 
 ## System shape (target)
 
@@ -35,6 +35,18 @@ src/plutus/
                     GET /partials/orders (HTMX 3s status poll)
   templates/        index.html (mode banner, account cards, positions, order
                     form), _orders.html (order table partial)
+  data/
+    provider.py     DataProvider protocol (UTC-indexed OHLCV frames) +
+                    is_stale() 2×-interval helper (wired in Phase 4/5)
+    alpaca_data.py  AlpacaDataProvider: IEX feed, adjustment=all
+    cache.py        CachedDataProvider: bars + bar_coverage ranges; daily ts
+                    normalized to UTC midnight at this boundary
+  backtest/
+    costs.py        CostModel: slippage bps + half-spread bps + per-share comm
+    engine.py       weights→returns engine; REQUIRED fill param:
+                    same_close | next_open | next_close; costs on fill day
+    metrics.py      CAGR/Sharpe/Sortino/maxDD/exposure/turnover/trades/yearly
+    persist.py      save_run/load_run → backtest_runs
 alembic/            Migrations; env.py resolves db_url from Settings,
                     tests override via `alembic -x db_url=...`
 tests/              fakes.py (FakeAdapter double) + config, migrations, order
@@ -77,21 +89,53 @@ tests/              fakes.py (FakeAdapter double) + config, migrations, order
   non-terminal orders via `get_order_status` on a 3s HTMX cycle. §3's
   websocket trade-updates stream belongs with the continuously running engine
   (Phase 5); the dashboard's HTMX script is loaded from unpkg (pinned 1.9.12).
+- **vectorbt is the oracle, not the engine (reviewable deviation from §2's
+  plain reading):** the daily backtester is a thin pandas weights→returns
+  engine whose convention semantics are pinned by hand-computed micro-case
+  tests; vectorbt (§2's library) independently reproduces the SMA-cross
+  acceptance backtest to 1e-6 relative. Rationale: the fill convention is the
+  load-bearing knob (prior analysis swung ~1.77→1.13 Sharpe / −47%→−83% maxDD
+  across conventions) and its math must be first-party and exactly testable.
+- **`fill` is a required engine parameter** (`same_close` / `next_open` /
+  `next_close`) — no default, callers must name the convention; it persists in
+  every backtest_runs record. §7's (b) is ambiguous about next-open vs
+  next-close, so both exist and reports can bracket all three.
+- **Adjusted bars only** (`adjustment=all` on IEX): TQQQ splits would poison
+  SMA/RSI signals otherwise. A future split invalidates cached history for
+  that symbol — flush its bars + bar_coverage rows and re-fetch (manual for
+  now; the bars table records the adjustment mode).
+- **Cache design:** bar_coverage stores contiguous fetched ranges per
+  (symbol, interval); requests inside coverage never touch the vendor. Daily
+  timestamps normalize to UTC midnight at the cache boundary (vendors stamp
+  session-open ET). Deliberately avoids exchange-calendar hole accounting.
+- Report conventions: √252/252 annualization, rf=0, Sortino = downside
+  deviation over all periods (target 0), trade = contiguous nonzero-weight run
+  per symbol with gross-of-cost P&L.
+- Dependencies added: `vectorbt`, `pandas` promoted to direct (§2-approved);
+  `pandas-stubs` dev-only for mypy strict.
 - **Known debt for Phase 4:** `config.REPO_ROOT` is derived from `__file__`,
   which is only correct for an editable install. For `live.lock` a wrong root
   fails safe (resolves to paper), but the Phase 4 kill switch checks `KILL` in
   the same root and a wrong root there fails unsafe — make the runtime root
   explicit/configurable when building the RiskManager.
 
+## Verification (Phase 2 acceptance)
+
+- `uv run pytest` — 69 passed: engine equity paths asserted against explicit
+  hand arithmetic per fill mode; next_close ≡ same_close∘shift property;
+  costs-on-fill-day; cache hit/merge/normalization; SMA(10/30) cross matches
+  vectorbt `Portfolio.from_signals` to 1e-6 relative; run persistence
+  round-trip
+- `uv run ruff check .` / `uv run mypy` (strict) — clean
+- **Real-data smoke (2026-08-16, paper keys, IEX):** 260 TQQQ daily bars
+  2025-08-01→2026-08-13 fetched in one vendor call (0.16s); identical second
+  request served from SQLite in 3ms with zero vendor calls.
+
 ## Verification (Phase 1 acceptance)
 
-- `uv run pytest` — 35 passed (incl. chaos test: timeout mid-order → lookup by
-  idempotency key, no double submit; key-selection safety; fill-confirmation
-  polling; live-mode rejection)
-- `uv run ruff check .` / `uv run mypy` (strict) — clean
-- `uv run uvicorn --factory plutus.app:create_app` boots; `/healthz` →
-  `{"status":"ok","trading_mode":"paper"}`; without keys, `/` renders the
-  configure-keys notice
+- 35 tests incl. chaos (timeout mid-order → idempotency-key lookup, no double
+  submit), key-selection safety, fill-confirmation polling, live-mode
+  rejection.
 - **Acceptance round-trip (2026-08-16, real paper account):** dashboard form →
   RiskManager → AlpacaAdapter → Alpaca paper API. A BTC/USD 0.001 market order
   (gtc — crypto trades 24/7 and rejects day TIF) filled and the 3s status poll
